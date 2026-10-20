@@ -46,9 +46,20 @@ export function decodeSessionState(response: unknown): SessionState {
 	return parsed.data as SessionState;
 }
 
-export function findSessionSelector(state: SessionState, category: "model" | "mode"): SelectOption | undefined {
+export type SessionSelectorCategory = "model" | "mode" | "thought_level";
+
+export function findSessionSelector(state: SessionState, category: SessionSelectorCategory): SelectOption | undefined {
 	return state.configOptions?.find((option): option is SelectOption =>
 		option.type === "select" && (option.category === category || option.id === category),
+	);
+}
+
+/** Antigravity keeps effort (`low`/`medium`/`high`) on a selector of its own beside
+ * the model one; a build that predates it leaves the tier inside the model id. */
+export function sessionThoughtLevel(state: SessionState): SelectOption | undefined {
+	return state.configOptions?.find((option): option is SelectOption =>
+		option.type === "select" &&
+		(option.category === "thought_level" || option.id === "thinking_level" || option.id === "thought_level"),
 	);
 }
 

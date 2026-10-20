@@ -85,6 +85,17 @@ export function projectModels(models: readonly AcpModelInfo[]): Model<typeof API
 	return projected;
 }
 
+export type ModelEffort = "low" | "medium" | "high";
+
+/** Antigravity advertises effort-qualified ids (`gemini-3.8-flash-high`) while the
+ * server's `model` config option takes only the base id and keeps the tier on a
+ * selector of its own, so a qualified id has to be split before it is sent. */
+export function splitEffortSuffix(modelId: string): { base: string; effort: ModelEffort } | undefined {
+	const match = /^(.*)-(low|medium|high)$/u.exec(modelId);
+	if (!match?.[1]) return undefined;
+	return { base: match[1], effort: match[2] as ModelEffort };
+}
+
 /** Resolve Pi's current reasoning level to the exact model ID advertised by
  * Antigravity. Unsupported programmatic levels clamp to the nearest tier. */
 export function resolveAcpModelId(

@@ -13,6 +13,7 @@ import {
 } from "@agentclientprotocol/sdk";
 
 import { PACKAGE_VERSION } from "../constants.js";
+import { splitEffortSuffix } from "../models.js";
 import { boundedNdjsonStream } from "./bounded-stream.js";
 import { abortError, AntigravityAcpError, redact } from "./errors.js";
 import { AntigravityProcess, type AntigravityProcessOptions } from "./process.js";
@@ -20,7 +21,10 @@ import { PromptWatchdog } from "./prompt-watchdog.js";
 import {
 	decodeSessionState,
 	findSessionSelector,
+	selectorValues,
+	sessionThoughtLevel,
 	type AcpNewSessionResponse,
+	type SessionSelectorCategory,
 	type SessionState,
 } from "./session-state.js";
 
@@ -224,17 +228,40 @@ export class AntigravityAcpConnection {
 
 	async setModel(sessionId: string, modelId: string, signal?: AbortSignal): Promise<void> {
 		await this.initialize(signal);
-		if (await this.setSelector(sessionId, "model", modelId, signal)) return;
+		// Antigravity advertises effort-qualified model ids (`gemini-3.8-flash-high`) but
+		// its `model` selector accepts only the base id, silently ignoring the qualified
+		// one, while the tier lives on a selector of its own. Send the two apart before
+		// falling back to the draft method that understands the whole id at once.
+		const effort = splitEffortSuffix(modelId);
+		if (effort) {
+			const level = sessionThoughtLevel(this.getSessionState(sessionId));
+			if (level && selectorValues(level).some((option) => option.value === effort.effort)) {
+				if (await this.applySelector(sessionId, "model", effort.base, signal)) {
+					await this.setSelector(sessionId, "thought_level", effort.effort, signal);
+					return;
+				}
+			}
+		}
+		if (await this.applySelector(sessionId, "model", modelId, signal)) return;
 		// Older official Antigravity builds still implement this removed draft
 		// method. Use the SDK's supported generic request API, not private internals.
-		await this.withAbort(
-			this.withDeadline(
-				this.connection.request("session/set_model", { sessionId, modelId }),
-				this.operationTimeoutMs,
-				"session/set_model",
-			),
-			signal,
-		);
+		try {
+			await this.withAbort(
+				this.withDeadline(
+					this.connection.request("session/set_model", { sessionId, modelId }),
+					this.operationTimeoutMs,
+					"session/set_model",
+				),
+				signal,
+			);
+		} catch (error) {
+			if (signal?.aborted) throw error;
+			const tried = effort ? `${effort.base} with thinking_level=${effort.effort}` : "no base id";
+			throw new AntigravityAcpError(
+				"protocol",
+				`Antigravity did not confirm the requested model selection (${modelId}; also tried ${tried})`,
+			);
+		}
 	}
 
 	async setMode(sessionId: string, modeId: string, signal?: AbortSignal): Promise<void> {
@@ -314,7 +341,20 @@ export class AntigravityAcpConnection {
 
 	private async setSelector(
 		sessionId: string,
-		category: "model" | "mode",
+		category: SessionSelectorCategory,
+		value: string,
+		signal?: AbortSignal,
+	): Promise<boolean> {
+		if (await this.applySelector(sessionId, category, value, signal)) return true;
+		if (!findSessionSelector(this.sessions.get(sessionId) ?? {}, category)) return false;
+		throw new AntigravityAcpError("protocol", `Antigravity did not confirm the requested ${category} selection`);
+	}
+
+	/** Applies one config option and reports whether the server confirmed the value.
+	 * A silent mismatch returns false, so a caller can try the next way first. */
+	private async applySelector(
+		sessionId: string,
+		category: SessionSelectorCategory,
 		value: string,
 		signal?: AbortSignal,
 	): Promise<boolean> {
@@ -329,10 +369,7 @@ export class AntigravityAcpConnection {
 			signal,
 		);
 		const state = this.updateSessionState(sessionId, response);
-		if (findSessionSelector(state, category)?.currentValue !== value) {
-			throw new AntigravityAcpError("protocol", `Antigravity did not confirm the requested ${category} selection`);
-		}
-		return true;
+		return findSessionSelector(state, category)?.currentValue === value;
 	}
 
 	private async withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
