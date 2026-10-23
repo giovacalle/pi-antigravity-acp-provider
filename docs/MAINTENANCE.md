@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-- Pi 1.1.x; both Pi development packages are pinned together to 1.1.0.
+- Pi 1.3.x; both Pi development packages are pinned together to 1.3.0.
 - Node.js 22.19.0 and 24 are checked in CI. Node declarations track the 24.x line.
 - ACP SDK 1.8.0 / stable protocol 1 (not experimental ACP v2). Both stable configuration selectors and older official Antigravity model APIs are supported and validated.
 - Host-provided Pi packages remain wildcard peers and are not bundled, following Pi's package contract. The README's compatibility statement defines tested support.
