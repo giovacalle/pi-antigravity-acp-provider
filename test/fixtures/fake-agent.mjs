@@ -7,10 +7,15 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const scenario = process.argv[2];
-const modern = scenario?.startsWith("config-options");
+const modern = scenario?.startsWith("config-options") || scenario === "effort-selector" || scenario === "legacy-set-model";
+// The real 1.4.x server takes only base model ids on its `model` selector and
+// silently ignores an effort-qualified id; these scenarios model that.
+const qualifiedModelRejected = scenario === "effort-selector" || scenario === "legacy-set-model";
+const effortSelector = scenario === "effort-selector";
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 let model = "auto";
 let mode = "default";
+let effort = "high";
 let permissionPromptId;
 let hangingPromptId;
 let bridgePromptId;
@@ -151,7 +156,9 @@ for await (const line of rl) {
 			},
 		});
 	} else if (method === "session/set_config_option") {
-		if (params.configId === "model-selector") model = params.value;
+		if (params.configId === "model-selector") {
+			if (!qualifiedModelRejected || ["auto", "gemini-test"].includes(params.value)) model = params.value;
+		} else if (params.configId === "thinking-level-selector") effort = params.value;
 		else if (params.configId === "permission-selector") {
 			if (scenario !== "config-options-ignored-mode") mode = params.value;
 		}
@@ -161,6 +168,11 @@ for await (const line of rl) {
 		}
 		send({ jsonrpc: "2.0", id, result: { configOptions: sessionConfigOptions() } });
 	} else if (modern && (method === "session/set_model" || method === "session/set_mode")) {
+		if (scenario === "legacy-set-model" && method === "session/set_model") {
+			model = params.modelId;
+			send({ jsonrpc: "2.0", id, result: {} });
+			continue;
+		}
 		send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Use config options" } });
 	} else if (method === "session/set_model") {
 		model = params.modelId;
@@ -293,6 +305,10 @@ function sessionConfigOptions() {
 			options: [{ group: "google", name: "Google", options: [
 				{ value: "auto", name: "Auto" }, { value: "gemini-test", name: "Gemini Test" },
 			] }] },
+		...(effortSelector || (scenario === "config-options-disappearing-thought" && model === "auto")
+			? [{ id: "thinking-level-selector", name: "Thinking", category: "thought_level", type: "select",
+				currentValue: effort, options: ["low", "medium", "high"].map((value) => ({ value, name: value })) }]
+			: []),
 		{ id: "permission-selector", name: "Permissions", category: "mode", type: "select", currentValue: mode,
 			options: ["default", "auto_edit", "yolo"].map((value) => ({ value, name: value })) },
 	];

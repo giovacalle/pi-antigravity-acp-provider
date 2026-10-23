@@ -505,8 +505,15 @@ export class AntigravityRuntime {
 			}
 			binding.writer = writer;
 			if (binding.modelId !== acpModelId) {
-				await binding.connection.setModel(binding.session.sessionId, acpModelId, options.signal);
-				binding.modelId = acpModelId;
+				try {
+					await binding.connection.setModel(binding.session.sessionId, acpModelId, options.signal);
+					binding.modelId = acpModelId;
+				} catch (error) {
+					// A split selection can change the base before effort fails. Neither
+					// the warm cache nor its saved session is trustworthy after failure.
+					await this.invalidateBinding(binding);
+					throw error;
+				}
 			}
 
 			const fresh = binding.messageCount === 0;

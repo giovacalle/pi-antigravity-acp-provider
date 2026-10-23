@@ -20,7 +20,9 @@ import { PromptWatchdog } from "./prompt-watchdog.js";
 import {
 	decodeSessionState,
 	findSessionSelector,
+	splitSessionModelId,
 	type AcpNewSessionResponse,
+	type SessionSelectorCategory,
 	type SessionState,
 } from "./session-state.js";
 
@@ -224,9 +226,28 @@ export class AntigravityAcpConnection {
 
 	async setModel(sessionId: string, modelId: string, signal?: AbortSignal): Promise<void> {
 		await this.initialize(signal);
-		if (await this.setSelector(sessionId, "model", modelId, signal)) return;
+		// Match the live selectors, not a fixed suffix list: future servers may
+		// advertise levels such as `off`. Exact native model IDs take precedence.
+		const state = this.getSessionState(sessionId);
+		const split = splitSessionModelId(state, modelId);
+		if (split) {
+			const baseConfirmed = findSessionSelector(state, "model")?.currentValue === split.base ||
+				await this.applySelector(sessionId, "model", split.base, signal);
+			if (baseConfirmed) {
+				// Changing the base may replace the effort selector. Require a fresh
+				// confirmation; never report a partially applied selection as success.
+				if (!await this.applySelector(sessionId, "thought_level", split.effort, signal)) {
+					throw new AntigravityAcpError("protocol", "Antigravity did not confirm the requested thought_level selection");
+				}
+				if (findSessionSelector(this.getSessionState(sessionId), "model")?.currentValue !== split.base) {
+					throw new AntigravityAcpError("protocol", "Antigravity changed the model during thought_level selection");
+				}
+				return;
+			}
+		}
+		if (await this.applySelector(sessionId, "model", modelId, signal)) return;
 		// Older official Antigravity builds still implement this removed draft
-		// method. Use the SDK's supported generic request API, not private internals.
+		// method. Preserve its classified auth/transport errors and their causes.
 		await this.withAbort(
 			this.withDeadline(
 				this.connection.request("session/set_model", { sessionId, modelId }),
@@ -314,7 +335,20 @@ export class AntigravityAcpConnection {
 
 	private async setSelector(
 		sessionId: string,
-		category: "model" | "mode",
+		category: SessionSelectorCategory,
+		value: string,
+		signal?: AbortSignal,
+	): Promise<boolean> {
+		if (!findSessionSelector(this.getSessionState(sessionId), category)) return false;
+		if (await this.applySelector(sessionId, category, value, signal)) return true;
+		throw new AntigravityAcpError("protocol", `Antigravity did not confirm the requested ${category} selection`);
+	}
+
+	/** A silent mismatch permits model selection to try the legacy method.
+	 * Real request failures must propagate without being treated as mismatches. */
+	private async applySelector(
+		sessionId: string,
+		category: SessionSelectorCategory,
 		value: string,
 		signal?: AbortSignal,
 	): Promise<boolean> {
@@ -329,10 +363,7 @@ export class AntigravityAcpConnection {
 			signal,
 		);
 		const state = this.updateSessionState(sessionId, response);
-		if (findSessionSelector(state, category)?.currentValue !== value) {
-			throw new AntigravityAcpError("protocol", `Antigravity did not confirm the requested ${category} selection`);
-		}
-		return true;
+		return findSessionSelector(state, category)?.currentValue === value;
 	}
 
 	private async withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
