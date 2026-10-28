@@ -1,66 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-18T11:14:05.776Z",
+  "generatedAt": "2026-10-28T13:01:47.141Z",
   "releases": [
-    {
-      "version": "1.1.1",
-      "platforms": {
-        "darwin-aarch64": {
-          "archive": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-agy_acp_server_1.1.1-darwin-arm64.zip",
-          "archiveSha256": "fdfa915652cdb7ba8085cc8fffed072cbe009251aa2c951aabdda07a8c28a189",
-          "archiveBytes": 316014828,
-          "binaryName": "agy_acp_server.par",
-          "binaryBytes": 802163856,
-          "harnessName": "localharness_external",
-          "harnessBytes": 116766704,
-          "args": []
-        },
-        "linux-x86_64": {
-          "archive": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_1.1.1-linux-x86_64.zip",
-          "archiveSha256": "38f62d01b32deb0907b3d39a71ec301fd36369f6ffd1cf262d4af385177f79df",
-          "archiveBytes": 681969407,
-          "binaryName": "agy_acp_server.par",
-          "binaryBytes": 1880360328,
-          "harnessName": "localharness_external",
-          "harnessBytes": 128966920,
-          "args": [
-            "--uid="
-          ]
-        },
-        "linux-aarch64": {
-          "archive": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_1.1.1-linux-arm64.zip",
-          "archiveSha256": "ed69e64b308fcb123ab54bf3277bf9cb0d651064f885ea5aab0ff520c7175398",
-          "archiveBytes": 656572786,
-          "binaryName": "agy_acp_server.par",
-          "binaryBytes": 1862073131,
-          "harnessName": "localharness_external",
-          "harnessBytes": 122158704,
-          "args": [
-            "--uid="
-          ]
-        },
-        "windows-x86_64": {
-          "archive": "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-agy_acp_server_1.1.1-windows-x86_64.zip",
-          "archiveSha256": "47cb50eef14f0a4655d78cfcfda869bcea7aaee5f9787e936bc2935ea612c3b8",
-          "archiveBytes": 468238392,
-          "binaryName": "agy_acp_server.exe",
-          "binaryBytes": 430801616,
-          "harnessName": "localharness_external.exe",
-          "harnessBytes": 130971800,
-          "args": []
-        },
-        "windows-aarch64": {
-          "archive": "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-agy_acp_server_1.1.1-windows-arm64.zip",
-          "archiveSha256": "35f4b1f47ba6a3fea7b0a3e30010df5ea73a64b4f0e7cf991cddc673ddfbcafc",
-          "archiveBytes": 468521191,
-          "binaryName": "agy_acp_server.exe",
-          "binaryBytes": 435075816,
-          "harnessName": "localharness_external.exe",
-          "harnessBytes": 122455704,
-          "args": []
-        }
-      }
-    },
     {
       "version": "1.2.1",
       "platforms": {
@@ -336,7 +277,76 @@
           "args": []
         }
       }
+    },
+    {
+      "version": "1.4.3",
+      "platforms": {
+        "darwin-aarch64": {
+          "archive": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.3-darwin-arm64.zip",
+          "archiveSha256": "c57db0a9b8b712daa9c3c17cdb990a61842ea569f279e8bd79d7aa85a303b20b",
+          "archiveBytes": 114147623,
+          "binaryName": "agy_acp_server.par",
+          "binaryBytes": 282446160,
+          "harnessName": "localharness_external",
+          "harnessBytes": 122957936,
+          "args": []
+        },
+        "darwin-x86_64": {
+          "archive": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.3-darwin-x86_64.zip",
+          "archiveSha256": "9392dbbdad7f0663dbfb5a0bf641297b0cf80d2ee9cd2d49a616bbbc7378731d",
+          "archiveBytes": 119801100,
+          "binaryName": "agy_acp_server.par",
+          "binaryBytes": 286653712,
+          "harnessName": "localharness_external",
+          "harnessBytes": 127612208,
+          "args": []
+        },
+        "linux-x86_64": {
+          "archive": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.3-linux-x86_64.zip",
+          "archiveSha256": "0634ce5306ba92c932945455e7a83fda78e2d99c33fa8aa6ee0566206a382714",
+          "archiveBytes": 336846435,
+          "binaryName": "agy_acp_server.par",
+          "binaryBytes": 927707135,
+          "harnessName": "localharness_external",
+          "harnessBytes": 133926136,
+          "args": [
+            "--uid="
+          ]
+        },
+        "linux-aarch64": {
+          "archive": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.3-linux-arm64.zip",
+          "archiveSha256": "05c153443b0b1175151c760eeddea538950bc9843e317d54786a1f03670182bc",
+          "archiveBytes": 322887047,
+          "binaryName": "agy_acp_server.par",
+          "binaryBytes": 932662106,
+          "harnessName": "localharness_external",
+          "harnessBytes": 127512832,
+          "args": [
+            "--uid="
+          ]
+        },
+        "windows-x86_64": {
+          "archive": "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.3-windows-x86_64.zip",
+          "archiveSha256": "54c2e16378d9a4952e1da70e355f3c33c4f284308d6de48ab3e6e34a127bd325",
+          "archiveBytes": 131267135,
+          "binaryName": "agy_acp_server.exe",
+          "binaryBytes": 87022872,
+          "harnessName": "localharness_external.exe",
+          "harnessBytes": 147843736,
+          "args": []
+        },
+        "windows-aarch64": {
+          "archive": "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.3-windows-arm64.zip",
+          "archiveSha256": "fcd46431ad33d3b510ce0b98fe7b43d095bd8b3f1c363ee2d57faa7ee981c7bb",
+          "archiveBytes": 134301870,
+          "binaryName": "agy_acp_server.exe",
+          "binaryBytes": 94238816,
+          "harnessName": "localharness_external.exe",
+          "harnessBytes": 139322008,
+          "args": []
+        }
+      }
     }
   ],
-  "signature": "FUPW7PC3VVgqLDebGEuP993pZBEaAkuUzz9yY5ZTL1mBb8ohm5D5bF24BYsQ7QivuB6nAPa/7jF2HQyqyPZbAQ=="
+  "signature": "dwlGB6Bc4f9KpPafxj5piTTDbzCcEs/6pa/oFYGj1PkZ8as54KpvbzJtzM9Yj4+1xhQW0bc25kBsf4vK97o7Bg=="
 }
