@@ -190,6 +190,7 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 					`Authentication: ${auth.status}${auth.authType ? ` (${auth.authType})` : ""}`,
 					`Credential storage (preflight): ${describeCredentialStorage()}`,
 					`Requested permission mode: ${permissionModeLabel(snapshot.permissionMode)}`,
+					`Native tools: ${Array.isArray(snapshot.nativeTools) ? snapshot.nativeTools.join(", ") || "none" : snapshot.nativeTools}`,
 					`Active bindings: ${snapshot.bindings}`,
 					`Idle eviction: ttl=${snapshot.idleTtlMs ? `${snapshot.idleTtlMs / 1000}s` : "off"} evicted=${snapshot.evictions}`,
 					`Live session cap: ${snapshot.maxLiveSessions || "unlimited"} evicted=${snapshot.capEvictions} overflows=${snapshot.capOverflows}`,
