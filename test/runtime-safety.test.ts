@@ -23,7 +23,7 @@ afterEach(async () => {
 	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore) {
+function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore, limits?: { idleTtlMs?: number }) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-runtime-safety-")); roots.push(root);
 	const log = path.join(root, "calls.jsonl"); fs.writeFileSync(log, "");
 	const connections: AntigravityAcpConnection[] = [];
@@ -31,7 +31,7 @@ function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSess
 		const connection = new AntigravityAcpConnection({ ...options, command: process.execPath,
 			args: [fakeAgent, ...(scenario ? [scenario] : [])], env: { ...process.env, FAKE_AGENT_LOG_FILE: log } });
 		connections.push(connection); return connection;
-	}, mode, store);
+	}, mode, store, limits);
 	runtimes.push(runtime);
 	const entries = () => fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method: string; prompt?: unknown; mode?: string });
 	return { root, runtime, connections, entries };
@@ -169,6 +169,46 @@ describe("session lifecycle", () => {
 	});
 });
 
+describe("idle eviction", () => {
+	afterEach(() => { vi.useRealTimers(); });
+
+	it("evicts an idle session and resumes it on the next turn", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		// Real setTimeout keeps ACP request deadlines working.
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+		const { runtime, connections, entries } = setup(undefined, "yolo", store, { idleTtlMs: 1_000 });
+		const first = await turn(runtime, [user("first")], "idle");
+		expect(first.stopReason).toBe("stop");
+
+		vi.advanceTimersByTime(2_000);
+
+		await connections[0]!.process.exited;
+		const evicted = await runtime.snapshot();
+		expect(evicted.bindings).toBe(0);
+		expect(evicted.evictions).toBe(1);
+		const next = await turn(runtime, [user("first"), first, user("next", 2)], "idle");
+		expect(next.stopReason).toBe("stop");
+		expect(entries().some((entry) => entry.method === "session/resume")).toBe(true);
+		expect((await runtime.snapshot()).processes[0]?.restored).toBe(true);
+	});
+
+	it("never evicts a session awaiting permission", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { idleTtlMs: 1_000 });
+		const parked = await turn(runtime, [user("request permission")], "parked");
+		expect(parked.stopReason).toBe("toolUse");
+
+		vi.advanceTimersByTime(2_000);
+
+		const snapshot = await runtime.snapshot();
+		expect(snapshot.bindings).toBe(1);
+		expect(snapshot.processes[0]?.waitingForPermission).toBe(true);
+		expect(snapshot.evictions).toBe(0);
+		expect(connections[0]!.process.alive).toBe(true);
+	});
+});
+
 describe("instruction updates during continuations", () => {
 	it.each([false, true])("rebuilds with changed instructions instead of pretending they reached ACP (restart=%s)", async (restart) => {
 		const fixture = setup();
@@ -277,7 +317,8 @@ describe("abort cleanup", () => {
 	it("cancels late or partially exposed permissions without leaving a timer", async () => {
 		vi.useFakeTimers();
 		try {
-			const { runtime } = setup();
+			// No idle sweep, so the timer count covers only permission timers.
+			const { runtime } = setup(undefined, "yolo", undefined, { idleTtlMs: 0 });
 			const internals = runtime as unknown as { requestPermission(binding: unknown, request: unknown): Promise<unknown> };
 			const binding = { session: { sessionId: "unit" }, abortRequested: false, permission: undefined,
 				writer: { finished: true, toolCall: vi.fn(() => { throw new Error("cannot expose"); }), done: vi.fn() } };

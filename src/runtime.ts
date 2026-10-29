@@ -43,7 +43,7 @@ import {
 	type ToolOmission,
 	type PiToolInvocation,
 } from "./mcp/bridge.js";
-import type { PermissionMode } from "./config.js";
+import { DEFAULT_IDLE_TTL_MS, type PermissionMode } from "./config.js";
 import { resolveAcpModelId } from "./models.js";
 import { type PromptParts, buildPromptParts, currentSystemInstructions } from "./stream/context.js";
 import { PiEventWriter } from "./stream/pi-events.js";
@@ -52,6 +52,7 @@ import { RuntimeMetrics } from "./status.js";
 
 const PERMISSION_TIMEOUT_MS = 120_000;
 const TOOL_BATCH_MS = 100;
+const IDLE_SWEEP_MAX_MS = 60_000;
 
 type AntigravityModel = Model<"antigravity-acp">;
 
@@ -94,6 +95,7 @@ interface Binding {
 	abortRequested: boolean;
 	piSessionId: string | undefined;
 	restored: boolean;
+	lastActivity: number;
 }
 
 export interface PermissionView {
@@ -117,6 +119,8 @@ export interface PermissionToolResult {
 export interface RuntimeSnapshot {
 	bindings: number;
 	permissionMode: PermissionMode;
+	idleTtlMs: number;
+	evictions: number;
 	metrics: ReturnType<RuntimeMetrics["snapshot"]>;
 	processes: Array<{
 		key: string;
@@ -132,6 +136,7 @@ export interface RuntimeSnapshot {
 		agentVersion: string | undefined;
 		mcpHttp: boolean;
 		restored: boolean;
+		idleMs: number;
 		ignoredStdoutNoiseLines: number;
 		stderrTail?: string;
 	}>;
@@ -154,16 +159,25 @@ export class AntigravityRuntime {
 	private readonly sessionStore: AcpSessionStore | undefined;
 	private readonly metrics = new RuntimeMetrics();
 	private permissionMode: PermissionMode;
+	private readonly idleTtlMs: number;
+	private readonly idleSweep: ReturnType<typeof setInterval> | undefined;
+	private evictions = 0;
 
 	constructor(
 		connectionFactory?: AntigravityConnectionFactory,
 		permissionMode: PermissionMode = "yolo",
 		sessionStore?: AcpSessionStore,
+		limits: { idleTtlMs?: number } = {},
 	) {
 		this.connectionFactory = connectionFactory ?? ((options) => new AntigravityAcpConnection(options));
 		this.ensureAgent = connectionFactory === undefined;
 		this.permissionMode = permissionMode;
 		this.sessionStore = sessionStore ?? (this.ensureAgent ? new AcpSessionStore() : undefined);
+		this.idleTtlMs = limits.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
+		if (this.idleTtlMs > 0) {
+			this.idleSweep = setInterval(() => this.sweepIdle(), Math.min(this.idleTtlMs, IDLE_SWEEP_MAX_MS));
+			this.idleSweep.unref();
+		}
 	}
 
 	stream(model: AntigravityModel, context: Context, options: SimpleStreamOptions = {}): PiEventWriter {
@@ -359,6 +373,7 @@ export class AntigravityRuntime {
 					agentVersion: binding.initialize.agentInfo?.version,
 					mcpHttp: binding.initialize.agentCapabilities?.mcpCapabilities?.http === true,
 					restored: binding.restored,
+					idleMs: Date.now() - binding.lastActivity,
 					ignoredStdoutNoiseLines: binding.connection.process.ignoredStdoutNoiseLines,
 					...(includeStderr ? { stderrTail: binding.connection.process.stderrTail } : {}),
 				};
@@ -367,6 +382,8 @@ export class AntigravityRuntime {
 		return {
 			bindings: processes.length,
 			permissionMode: this.permissionMode,
+			idleTtlMs: this.idleTtlMs,
+			evictions: this.evictions,
 			metrics: this.metrics.snapshot(),
 			processes,
 		};
@@ -374,6 +391,7 @@ export class AntigravityRuntime {
 
 	close(): Promise<void> {
 		this.disposed = true;
+		clearInterval(this.idleSweep);
 		return this.closePromise ??= this.closeBindings();
 	}
 
@@ -392,6 +410,23 @@ export class AntigravityRuntime {
 			clearTimeout(timer);
 		}
 		await this.dropBinding(key, binding, false);
+	}
+
+	/** Drops warm sessions idle past the TTL; their saved records let the next turn resume them. */
+	private sweepIdle(): void {
+		const now = Date.now();
+		for (const binding of [...this.resolvedBindings]) {
+			if (now - binding.lastActivity < this.idleTtlMs || !this.isIdle(binding)) continue;
+			// Leave the set now so an overlapping sweep cannot count the same eviction twice.
+			this.resolvedBindings.delete(binding);
+			this.evictions += 1;
+			void this.dropBinding(binding.key, binding, false).catch(() => undefined);
+		}
+	}
+
+	private isIdle(binding: Binding): boolean {
+		return !binding.turnCompletion && !binding.permission && binding.pendingTools.size === 0 &&
+			!this.queues.has(binding.key);
 	}
 
 	private async closeBindings(): Promise<void> {
@@ -435,6 +470,8 @@ export class AntigravityRuntime {
 		const tools = context.tools ?? [];
 		const acpModelId = resolveAcpModelId(model, options.reasoning);
 		let binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
+		// Keeps the idle sweep off a binding this turn is about to use.
+		binding.lastActivity = Date.now();
 		await this.modeChanges;
 		this.assertEpoch(epoch);
 		// Check before continuation early returns as well as before fresh prompts.
@@ -603,6 +640,7 @@ export class AntigravityRuntime {
 			binding.turnCompletion = undefined;
 			binding.abortRequested = false;
 			binding.writer = undefined;
+			binding.lastActivity = Date.now();
 			release();
 			if (this.queues.get(key) === queue) this.queues.delete(key);
 			if (!persistent) await this.dropBinding(key, binding);
@@ -772,6 +810,7 @@ export class AntigravityRuntime {
 				abortRequested: false,
 				piSessionId,
 				restored,
+				lastActivity: Date.now(),
 			};
 			binding = createdBinding;
 			this.persistBinding(createdBinding);

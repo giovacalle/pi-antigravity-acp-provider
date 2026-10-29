@@ -96,7 +96,7 @@ On macOS the Antigravity server keeps the consumer token in the login keychain (
 /antigravity-acp permissions yolo
 ```
 
-Permission and runtime-update modes are saved in `$PI_CODING_AGENT_DIR/antigravity-acp-provider/config.json` (where `PI_CODING_AGENT_DIR` defaults to `~/.pi/agent`). Runtime updates default to `automatic`; only provider-managed installations are replaced. ACP session bindings are saved beside the config in `sessions.json`.
+Permission and runtime-update modes are saved in `$PI_CODING_AGENT_DIR/antigravity-acp-provider/config.json` (where `PI_CODING_AGENT_DIR` defaults to `~/.pi/agent`). Runtime updates default to `automatic`; only provider-managed installations are replaced. ACP session bindings are saved beside the config in `sessions.json`. An ACP process idle for `idleTtlMs` (default `600000`, 10 minutes; `0` disables) is stopped, and its next turn resumes the saved session.
 
 On first use of a custom profile without a config, existing permission/update settings are copied from the default agent directory (or the legacy Gemini-provider config). Existing custom configs are never overwritten, and saved sessions are not copied. **Custom Pi profiles do not isolate Antigravity accounts or managed runtimes:** Antigravity's OAuth credentials and runtime installation remain in their shared locations.
 
