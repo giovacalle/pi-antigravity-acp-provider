@@ -377,6 +377,23 @@ export class AntigravityRuntime {
 		return this.closePromise ??= this.closeBindings();
 	}
 
+	/** Closes one Pi session's binding but keeps its saved record so a later turn can resume it. */
+	async closeSession(piSessionId: string): Promise<void> {
+		const key = `sid:${piSessionId}`;
+		this.queues.delete(key);
+		const binding = await this.bindings.get(key)?.catch(() => undefined);
+		if (!binding) return;
+		const completion = binding.turnCompletion;
+		if (completion) {
+			abortTurn(binding);
+			void binding.connection.cancel(binding.session.sessionId).catch(() => undefined);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			await Promise.race([completion, new Promise<void>((resolve) => { timer = setTimeout(resolve, 1_500); })]);
+			clearTimeout(timer);
+		}
+		await this.dropBinding(key, binding, false);
+	}
+
 	private async closeBindings(): Promise<void> {
 		this.bindingEpoch += 1;
 		const pending = [...this.bindings.values()];
