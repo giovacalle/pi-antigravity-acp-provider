@@ -89,6 +89,9 @@ interface Binding {
 	permission: PendingPermission | undefined;
 	pendingTools: Map<string, PendingPiTool>;
 	toolCalls: Map<string, ToolCallEntry>;
+	/** Latest `usage_update.used` and the inference count of the running ACP prompt. */
+	contextUsed: number | undefined;
+	inferences: number;
 	toolBatchTimer: ReturnType<typeof setTimeout> | undefined;
 	bridge: PiMcpBridge | undefined;
 	toolFingerprint: string;
@@ -644,6 +647,8 @@ export class AntigravityRuntime {
 			binding.needsReconstruction = false;
 			binding.pendingContextCount = context.messages.length;
 			binding.pendingContextFingerprint = messagesFingerprint(context.messages);
+			binding.contextUsed = undefined;
+			binding.inferences = 0;
 			binding.turnCompletion = new Promise<void>((resolve) => {
 				completeTurn = resolve;
 			});
@@ -661,8 +666,17 @@ export class AntigravityRuntime {
 			const activeWriter = binding.writer ?? writer;
 			if (binding.abortRequested) throw abortError();
 			const usage = usageFromPrompt(response);
-			activeWriter.message.usage = usage;
 			this.metrics.record(response, usage);
+			if (binding.contextUsed !== undefined) {
+				// Pi sizes the context from the last message's totalTokens, but the response sums every
+				// inference. agy adds cache reads to `used` twice; with one inference the response's cache
+				// count is that inference's, so subtracting it is exact. Longer prompts with cache reads
+				// still overcount by the last inference's cached tokens.
+				activeWriter.message.usage = {
+					...usage,
+					totalTokens: binding.inferences === 1 ? Math.max(0, binding.contextUsed - usage.cacheRead) : binding.contextUsed,
+				};
+			} else activeWriter.message.usage = usage;
 			activeWriter.message.rawStopReason = response.stopReason;
 			binding.messageCount = binding.pendingContextCount || parts.messageCount;
 			binding.historyFingerprint = binding.pendingContextFingerprint;
@@ -879,6 +893,8 @@ export class AntigravityRuntime {
 				permission: undefined,
 				pendingTools: new Map(),
 				toolCalls: new Map(),
+				contextUsed: undefined,
+				inferences: 0,
 				toolBatchTimer: undefined,
 				bridge,
 				toolFingerprint: piToolFingerprint(tools),
@@ -1000,6 +1016,11 @@ export class AntigravityRuntime {
 			if (activity.type === "text") binding.writer.text(activity.delta);
 			else if (activity.type === "thought") binding.writer.thinking(activity.delta);
 			else if (activity.type === "tool" || activity.type === "plan") binding.writer.thinking(activity.text);
+			else if (activity.type === "usage") {
+				binding.contextUsed = activity.used;
+				binding.inferences += 1;
+				if (!binding.writer.finished) binding.writer.message.usage.totalTokens = activity.used;
+			}
 		}
 	}
 

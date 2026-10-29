@@ -214,8 +214,13 @@ for await (const line of rl) {
 			}, Number(process.env.FAKE_PROGRESS_STEP_MS ?? 30));
 			continue;
 		}
+		const notify = (update) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId, update } });
+		// agy reports the context size after each inference; setup sends used: 0.
+		const usageUpdate = (used) => notify({ sessionUpdate: "usage_update", used, size: 1048576 });
 		if (!continuing && text.includes("bridge") && mcpServer) {
 			bridgePromptId = id;
+			const reportUsage = text.includes("usage");
+			if (reportUsage) { usageUpdate(0); usageUpdate(1000); }
 			const invocation = text.includes("parallel")
 				? Promise.all([
 						text.includes("reversed")
@@ -230,6 +235,7 @@ for await (const line of rl) {
 				if (text.includes("bridge delayed")) await new Promise((resolve) => setTimeout(resolve, 500));
 				if (bridgePromptId !== id) return;
 				bridgePromptId = undefined;
+				if (reportUsage) usageUpdate(1800);
 				send({
 					jsonrpc: "2.0",
 					method: "session/update",
@@ -238,8 +244,16 @@ for await (const line of rl) {
 						update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: result } },
 					},
 				});
-				send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+				send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn",
+					...(reportUsage ? { usage: { inputTokens: 2400, outputTokens: 200, totalTokens: 2600 } } : {}) } });
 			});
+			continue;
+		}
+		if (text === "usage single") {
+			usageUpdate(1600);
+			notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello" } });
+			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn",
+				usage: { inputTokens: 1000, cachedReadTokens: 400, outputTokens: 150, thoughtTokens: 50, totalTokens: 1200 } } });
 			continue;
 		}
 		if (!continuing && text.includes("hang")) {
