@@ -87,6 +87,22 @@ describe("extension entry point", () => {
 		expect(second.stopReason).toBe("stop");
 	});
 
+	it("closes only the child's ACP process when the child shuts down", async () => {
+		await load("parent");
+		const child = await load("child");
+		const first = await stream([user("hello")], "parent");
+		await stream([user("hello")], "child");
+		const [parentConnection, childConnection] = connections;
+
+		await child.pi.emit("session_shutdown", { reason: "quit" }, child.ctx);
+
+		await childConnection!.process.exited;
+		expect(parentConnection!.process.alive).toBe(true);
+		await stream([user("hello"), first, user("next", 2)], "parent");
+		expect(connections).toHaveLength(2);
+		expect(parentConnection!.process.alive).toBe(true);
+	});
+
 	it("resolves a permission parked through one instance with another instance's permission tool", async () => {
 		const parent = await load("parent");
 		const child = await load("child");

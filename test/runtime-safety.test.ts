@@ -100,6 +100,41 @@ describe("permission policy and lifecycle", () => {
 	});
 });
 
+describe("session lifecycle", () => {
+	it("closes only the ending session and keeps its saved record", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const { runtime, connections } = setup(undefined, "yolo", store);
+		await turn(runtime, [user("a")], "A");
+		const first = await turn(runtime, [user("b")], "B");
+
+		await runtime.closeSession("A");
+
+		await connections[0]!.process.exited;
+		expect(connections[1]!.process.alive).toBe(true);
+		expect(store.get("A")).toBeDefined();
+		const next = await turn(runtime, [user("b"), first, user("next", 2)], "B");
+		expect(next.stopReason).toBe("stop");
+		expect((await runtime.snapshot()).processes[0]?.pid).toBe(connections[1]!.process.pid);
+		expect(connections).toHaveLength(2);
+	});
+
+	it("aborts and waits for an in-flight turn before closing its session", async () => {
+		const { runtime, connections, entries } = setup();
+		const writer = runtime.stream(model, { messages: [user("hang")] }, { sessionId: "A", apiKey: "test-key" });
+		const events: Array<{ type: string; reason?: string }> = [];
+		const drained = (async () => { for await (const event of writer.stream) events.push(event); })();
+		await vi.waitFor(() => expect(entries().some((entry) => entry.method === "session/prompt")).toBe(true));
+
+		await runtime.closeSession("A");
+
+		await drained;
+		expect(events.at(-1)).toMatchObject({ type: "error", reason: "aborted" });
+		await connections[0]!.process.exited;
+		expect((await runtime.snapshot()).bindings).toBe(0);
+	});
+});
+
 describe("instruction updates during continuations", () => {
 	it.each([false, true])("rebuilds with changed instructions instead of pretending they reached ACP (restart=%s)", async (restart) => {
 		const fixture = setup();

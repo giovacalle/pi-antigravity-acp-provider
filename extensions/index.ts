@@ -230,7 +230,8 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 		}
 	});
 
-	pi.on("session_shutdown", async (event) => {
+	pi.on("session_shutdown", async (event, ctx) => {
+		await runtime.closeSession(ctx.sessionManager.getSessionId());
 		await releaseSharedRuntime(shared, event.reason);
 	});
 }
