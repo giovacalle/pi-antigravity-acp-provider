@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -126,6 +128,31 @@ describe("AntigravityAcpConnection", () => {
 			expect(sessionModels(loaded)?.currentModelId).toBe("gemini-test");
 		} finally {
 			await connection.close();
+		}
+	});
+
+	it("sends _meta on session setup only when given", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-connection-meta-"));
+		const log = path.join(root, "calls.jsonl");
+		const connection = new AntigravityAcpConnection({
+			cwd: path.dirname(fakeAgent), command: process.execPath, args: [fakeAgent, "config-options"],
+			env: { ...process.env, FAKE_AGENT_LOG_FILE: log },
+		});
+		try {
+			const session = await connection.newSession(process.cwd(), undefined, [], { antigravity: { x: 1 } });
+			await connection.resumeSession(session.sessionId, process.cwd(), [], undefined, { antigravity: { x: 2 } });
+			await connection.loadSession(session.sessionId, process.cwd(), [], undefined, { antigravity: { x: 3 } });
+			await connection.newSession(process.cwd());
+			const entries = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>)
+				.filter((entry) => ["session/new", "session/resume", "session/load"].includes(entry.method as string));
+			expect(entries.map((entry) => entry.method)).toEqual(["session/new", "session/resume", "session/load", "session/new"]);
+			expect(entries.slice(0, 3).map((entry) => entry._meta)).toEqual([
+				{ antigravity: { x: 1 } }, { antigravity: { x: 2 } }, { antigravity: { x: 3 } },
+			]);
+			expect("_meta" in entries[3]!).toBe(false);
+		} finally {
+			await connection.close();
+			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
 
