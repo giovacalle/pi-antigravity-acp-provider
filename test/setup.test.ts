@@ -201,6 +201,42 @@ describe("default auth profile", () => {
 	});
 });
 
+describe("managed runtime readiness", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	async function loadSetupWithManagedRuntime(): Promise<typeof import("../src/acp/setup.js")> {
+		const home = temporaryDirectory();
+		const current = path.join(home, ".local", "opt", "agy-acp", "current");
+		fs.mkdirSync(current, { recursive: true });
+		for (const name of ["agy_acp_server.par", "localharness_external"]) {
+			fs.writeFileSync(path.join(current, name), name, { mode: 0o755 });
+		}
+		vi.spyOn(os, "homedir").mockReturnValue(home);
+		vi.stubEnv("AGY_ACP_BIN", "");
+		vi.stubEnv("GEMINI_HOME", temporaryDirectory());
+		vi.stubEnv("PI_CODING_AGENT_DIR", temporaryDirectory());
+		vi.resetModules();
+		return import("../src/acp/setup.js");
+	}
+
+	it("checks for updates at most once per interval when the network fails", async () => {
+		const setup = await loadSetupWithManagedRuntime();
+		const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+		vi.stubGlobal("fetch", fetchMock);
+		await setup.ensureAntigravityAcpReady();
+		await setup.ensureAntigravityAcpReady();
+		expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(2);
+	});
+
+	it("does not wait for the network once a managed runtime is installed", async () => {
+		const setup = await loadSetupWithManagedRuntime();
+		vi.stubGlobal("fetch", vi.fn(() => new Promise<never>(() => undefined)));
+		await expect(setup.ensureAntigravityAcpReady()).resolves.toBeUndefined();
+	});
+});
+
 function temporaryDirectory(): string {
 	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-setup-"));
 	directories.push(directory);

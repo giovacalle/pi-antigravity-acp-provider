@@ -31,6 +31,11 @@ const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60_000;
 const LOCK_POLL_MS = 250;
 const LOCK_STALE_MS = INSTALL_TIMEOUT_MS + 5 * 60_000;
 let inFlight: Promise<void> | undefined;
+// Per-process memo: a verified launch skips repeated permission repair, and a
+// failed or completed update check is not retried before the next interval.
+let verifiedLaunch: string | undefined;
+let nextUpdateCheckAt = 0;
+let backgroundUpdate: Promise<void> | undefined;
 
 interface RegistryEntry {
 	archive: string;
@@ -174,21 +179,35 @@ async function ensureOnce(onProgress?: (message: string) => void): Promise<void>
 	}
 
 	if (launch && launch.source !== "managed") return;
-	if (launch) repairRuntimeExecutablePermissions(path.dirname(launch.command));
-	if (launch && loadConfig().runtimeUpdates !== "automatic") return;
-
-	let resolved: Awaited<ReturnType<typeof resolveLatestRelease>>;
-	try {
-		resolved = await resolveLatestRelease(platformKey(), false);
-	} catch (error) {
-		// Registry or manifest outages must not disable a working managed runtime.
-		if (launch) return;
-		throw error;
+	if (launch) {
+		if (verifiedLaunch !== launch.command) {
+			repairRuntimeExecutablePermissions(path.dirname(launch.command));
+			verifiedLaunch = launch.command;
+		}
+		// A working runtime never waits for the network; updates land for later spawns.
+		if (loadConfig().runtimeUpdates === "automatic") updateInBackground(launch);
+		return;
 	}
-	const { release } = resolved;
-	const installedVersion = launch ? readInstallRecord(path.dirname(launch.command))?.version : undefined;
-	if (installedVersion && compareRuntimeVersions(installedVersion, release.version) >= 0) return;
+
+	const { release } = await resolveLatestRelease(platformKey(), false);
 	await installRuntime(release, onProgress);
+}
+
+function updateInBackground(launch: AntigravityLaunch): void {
+	if (backgroundUpdate || Date.now() < nextUpdateCheckAt) return;
+	nextUpdateCheckAt = Date.now() + UPDATE_CHECK_INTERVAL_MS;
+	backgroundUpdate = (async () => {
+		const { release } = await resolveLatestRelease(platformKey(), false);
+		const installedVersion = readInstallRecord(path.dirname(launch.command))?.version;
+		if (installedVersion && compareRuntimeVersions(installedVersion, release.version) >= 0) return;
+		await installRuntime(release);
+		verifiedLaunch = undefined;
+	})()
+		// Registry or manifest outages must not disable a working managed runtime.
+		.catch(() => undefined)
+		.finally(() => {
+			backgroundUpdate = undefined;
+		});
 }
 
 async function resolveLatestRelease(
