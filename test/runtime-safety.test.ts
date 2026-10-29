@@ -212,13 +212,33 @@ describe("idle eviction", () => {
 describe("live session cap", () => {
 	it("evicts the least recently used idle session before spawning past the cap", async () => {
 		const { runtime, connections } = setup(undefined, "yolo", undefined, { maxLiveSessions: 2 });
-		for (const sessionId of ["A", "B", "C"]) expect((await turn(runtime, [user("hello")], sessionId)).stopReason).toBe("stop");
+		const first = await turn(runtime, [user("hello")], "A");
+		expect((await turn(runtime, [user("hello")], "B")).stopReason).toBe("stop");
+		expect((await turn(runtime, [user("hello"), first, user("again", 2)], "A")).stopReason).toBe("stop");
+		expect((await turn(runtime, [user("hello")], "C")).stopReason).toBe("stop");
 
-		await connections[0]!.process.exited;
-		expect(connections[1]!.process.alive).toBe(true);
+		await connections[1]!.process.exited;
+		expect(connections).toHaveLength(3);
+		expect(connections[0]!.process.alive).toBe(true);
 		expect(connections[2]!.process.alive).toBe(true);
 		const snapshot = await runtime.snapshot();
 		expect(snapshot.bindings).toBe(2);
+		expect(snapshot.capEvictions).toBe(1);
+		expect(snapshot.evictions).toBe(0);
+		expect(snapshot.capOverflows).toBe(0);
+	});
+
+	it("counts sessions that are still starting against the cap", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { maxLiveSessions: 2 });
+		expect((await turn(runtime, [user("hello")], "A")).stopReason).toBe("stop");
+
+		const started = await Promise.all([turn(runtime, [user("hello")], "B"), turn(runtime, [user("hello")], "C")]);
+
+		expect(started.map((message) => message.stopReason)).toEqual(["stop", "stop"]);
+		await connections[0]!.process.exited;
+		const snapshot = await runtime.snapshot();
+		expect(snapshot.bindings).toBe(2);
+		expect(snapshot.capEvictions).toBe(1);
 		expect(snapshot.capOverflows).toBe(0);
 	});
 

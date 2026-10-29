@@ -122,6 +122,7 @@ export interface RuntimeSnapshot {
 	idleTtlMs: number;
 	evictions: number;
 	maxLiveSessions: number;
+	capEvictions: number;
 	capOverflows: number;
 	metrics: ReturnType<RuntimeMetrics["snapshot"]>;
 	processes: Array<{
@@ -165,6 +166,8 @@ export class AntigravityRuntime {
 	private readonly idleSweep: ReturnType<typeof setInterval> | undefined;
 	private evictions = 0;
 	private readonly maxLiveSessions: number;
+	private readonly startingBindings = new Set<symbol>();
+	private capEvictions = 0;
 	private capOverflows = 0;
 
 	constructor(
@@ -390,6 +393,7 @@ export class AntigravityRuntime {
 			idleTtlMs: this.idleTtlMs,
 			evictions: this.evictions,
 			maxLiveSessions: this.maxLiveSessions,
+			capEvictions: this.capEvictions,
 			capOverflows: this.capOverflows,
 			metrics: this.metrics.snapshot(),
 			processes,
@@ -424,27 +428,36 @@ export class AntigravityRuntime {
 		const now = Date.now();
 		for (const binding of [...this.resolvedBindings]) {
 			if (now - binding.lastActivity < this.idleTtlMs || !this.isIdle(binding)) continue;
+			this.evictions += 1;
 			void this.evict(binding);
 		}
 	}
 
-	/** Makes room for a new binding at the cap; busy sessions are never touched, so the cap may be exceeded. */
+	/**
+	 * Makes room for a new binding at the cap; busy sessions are never touched, so the cap may be exceeded.
+	 * Runs synchronously up to the eviction so sessions still starting count against the cap.
+	 */
 	private async evictForCap(key: string): Promise<void> {
-		if (this.maxLiveSessions === 0 || this.resolvedBindings.size < this.maxLiveSessions) return;
-		let victim: Binding | undefined;
-		for (const binding of this.resolvedBindings) {
-			if (binding.key === key || !this.isIdle(binding)) continue;
-			if (!victim || binding.lastActivity < victim.lastActivity) victim = binding;
+		if (this.maxLiveSessions === 0 || this.resolvedBindings.size + this.startingBindings.size < this.maxLiveSessions) return;
+		// The set is kept in least-recently-used order by touch().
+		const victim = [...this.resolvedBindings].find((binding) => binding.key !== key && this.isIdle(binding));
+		if (!victim) {
+			this.capOverflows += 1;
+			return;
 		}
-		if (victim) await this.evict(victim);
-		else this.capOverflows += 1;
+		this.capEvictions += 1;
+		await this.evict(victim);
 	}
 
 	private evict(binding: Binding): Promise<void> {
-		// Leave the set now so an overlapping eviction cannot pick or count the same binding twice.
+		// Leave the set now so an overlapping eviction cannot pick the same binding twice.
 		this.resolvedBindings.delete(binding);
-		this.evictions += 1;
 		return this.dropBinding(binding.key, binding, false).catch(() => undefined);
+	}
+
+	private touch(binding: Binding): void {
+		binding.lastActivity = Date.now();
+		if (this.resolvedBindings.delete(binding)) this.resolvedBindings.add(binding);
 	}
 
 	private isIdle(binding: Binding): boolean {
@@ -494,7 +507,7 @@ export class AntigravityRuntime {
 		const acpModelId = resolveAcpModelId(model, options.reasoning);
 		let binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
 		// Keeps the idle sweep off a binding this turn is about to use.
-		binding.lastActivity = Date.now();
+		this.touch(binding);
 		await this.modeChanges;
 		this.assertEpoch(epoch);
 		// Check before continuation early returns as well as before fresh prompts.
@@ -663,7 +676,7 @@ export class AntigravityRuntime {
 			binding.turnCompletion = undefined;
 			binding.abortRequested = false;
 			binding.writer = undefined;
-			binding.lastActivity = Date.now();
+			this.touch(binding);
 			release();
 			if (this.queues.get(key) === queue) this.queues.delete(key);
 			if (!persistent) await this.dropBinding(key, binding);
@@ -740,12 +753,34 @@ export class AntigravityRuntime {
 		tools: NonNullable<Context["tools"]>,
 		signal?: AbortSignal,
 	): Promise<Binding> {
+		const epoch = this.bindingEpoch;
+		const eviction = this.evictForCap(key);
+		// Reserved before the first await so parallel starts see each other at the cap.
+		const slot = Symbol(key);
+		this.startingBindings.add(slot);
+		try {
+			await eviction;
+			this.assertEpoch(epoch);
+			return await this.startBinding(key, model, acpModelId, apiKey, writer, tools, slot, signal);
+		} finally {
+			this.startingBindings.delete(slot);
+		}
+	}
+
+	private async startBinding(
+		key: string,
+		model: AntigravityModel,
+		acpModelId: string,
+		apiKey: string | undefined,
+		writer: PiEventWriter,
+		tools: NonNullable<Context["tools"]>,
+		slot: symbol,
+		signal?: AbortSignal,
+	): Promise<Binding> {
 		const cwd = process.cwd();
 		let binding: Binding | undefined;
 		let bridge: PiMcpBridge | undefined;
 		const epoch = this.bindingEpoch;
-		await this.evictForCap(key);
-		this.assertEpoch(epoch);
 		const connection = this.createConnection({
 			cwd,
 			handlers: {
@@ -839,6 +874,7 @@ export class AntigravityRuntime {
 			};
 			binding = createdBinding;
 			this.persistBinding(createdBinding);
+			this.startingBindings.delete(slot);
 			this.resolvedBindings.add(createdBinding);
 			void connection.process.exited.then(() => {
 				cancelPermission(createdBinding);
