@@ -4,12 +4,15 @@ import path from "node:path";
 
 export type PermissionMode = "default" | "auto_edit" | "yolo";
 export type RuntimeUpdateMode = "automatic" | "notify" | "manual";
+// Antigravity builtin tools to enable: every one, none, or the listed names.
+export type NativeTools = "all" | "none" | string[];
 
 export interface AntigravityAcpConfig {
 	permissions: PermissionMode;
 	runtimeUpdates: RuntimeUpdateMode;
 	idleTtlMs: number;
 	maxLiveSessions: number;
+	nativeTools: NativeTools;
 }
 
 export const DEFAULT_IDLE_TTL_MS = 600_000;
@@ -54,6 +57,7 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 			runtimeUpdates?: unknown;
 			idleTtlMs?: unknown;
 			maxLiveSessions?: unknown;
+			nativeTools?: unknown;
 		};
 		return {
 			permissions: isPermissionMode(parsed.permissions) ? parsed.permissions : "yolo",
@@ -62,11 +66,12 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 			maxLiveSessions: Number.isSafeInteger(parsed.maxLiveSessions) && (parsed.maxLiveSessions as number) >= 0
 				? parsed.maxLiveSessions as number
 				: DEFAULT_MAX_LIVE_SESSIONS,
+			nativeTools: isNativeTools(parsed.nativeTools) ? parsed.nativeTools : "all",
 		};
 	} catch {
 		// Missing or malformed configuration uses the documented defaults.
 	}
-	return { permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: DEFAULT_IDLE_TTL_MS, maxLiveSessions: DEFAULT_MAX_LIVE_SESSIONS };
+	return { permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: DEFAULT_IDLE_TTL_MS, maxLiveSessions: DEFAULT_MAX_LIVE_SESSIONS, nativeTools: "all" };
 }
 
 export function savePermissionMode(mode: PermissionMode, file = resolveConfigPath()): void {
@@ -117,6 +122,11 @@ export function isPermissionMode(value: unknown): value is PermissionMode {
 
 export function isRuntimeUpdateMode(value: unknown): value is RuntimeUpdateMode {
 	return value === "automatic" || value === "notify" || value === "manual";
+}
+
+function isNativeTools(value: unknown): value is NativeTools {
+	return value === "all" || value === "none" ||
+		(Array.isArray(value) && value.every((name) => typeof name === "string" && name.length > 0));
 }
 
 // Node timers overflow above 2^31 - 1 ms.

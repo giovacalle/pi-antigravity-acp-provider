@@ -44,7 +44,7 @@ import {
 	type ToolOmission,
 	type PiToolInvocation,
 } from "./mcp/bridge.js";
-import { DEFAULT_IDLE_TTL_MS, DEFAULT_MAX_LIVE_SESSIONS, type PermissionMode } from "./config.js";
+import { DEFAULT_IDLE_TTL_MS, DEFAULT_MAX_LIVE_SESSIONS, type NativeTools, type PermissionMode } from "./config.js";
 import { resolveAcpModelId } from "./models.js";
 import { type PromptParts, buildPromptParts, currentSystemInstructions } from "./stream/context.js";
 import { PiEventWriter } from "./stream/pi-events.js";
@@ -125,6 +125,7 @@ export interface RuntimeSnapshot {
 	maxLiveSessions: number;
 	capEvictions: number;
 	capOverflows: number;
+	nativeTools: NativeTools;
 	metrics: ReturnType<RuntimeMetrics["snapshot"]>;
 	processes: Array<{
 		key: string;
@@ -171,13 +172,15 @@ export class AntigravityRuntime {
 	private readonly startingBindings = new Set<symbol>();
 	private capEvictions = 0;
 	private capOverflows = 0;
+	private readonly nativeTools: NativeTools;
 
 	constructor(
 		connectionFactory?: AntigravityConnectionFactory,
 		permissionMode: PermissionMode = "yolo",
 		sessionStore?: AcpSessionStore,
-		limits: { idleTtlMs?: number; maxLiveSessions?: number } = {},
+		limits: { idleTtlMs?: number; maxLiveSessions?: number; nativeTools?: NativeTools } = {},
 	) {
+		this.nativeTools = limits.nativeTools ?? "all";
 		this.maxLiveSessions = limits.maxLiveSessions ?? DEFAULT_MAX_LIVE_SESSIONS;
 		this.connectionFactory = connectionFactory ?? ((options) => new AntigravityAcpConnection(options));
 		this.ensureAgent = connectionFactory === undefined;
@@ -397,6 +400,7 @@ export class AntigravityRuntime {
 			maxLiveSessions: this.maxLiveSessions,
 			capEvictions: this.capEvictions,
 			capOverflows: this.capOverflows,
+			nativeTools: this.nativeTools,
 			metrics: this.metrics.snapshot(),
 			processes,
 		};
@@ -825,10 +829,13 @@ export class AntigravityRuntime {
 			const saved = piSessionId ? this.sessionStore?.get(piSessionId) : undefined;
 			let session: AcpNewSessionResponse | undefined;
 			let restored = false;
-			if (saved?.cwd === cwd) {
+			const meta = sessionMeta(this.nativeTools);
+			// Antigravity persists the builtin filter per session and keeps it on resume, so a session
+			// saved under another filter is replaced rather than restored.
+			if (saved?.cwd === cwd && saved.nativeTools === nativeToolsKey(this.nativeTools)) {
 				if (initialize.agentCapabilities?.sessionCapabilities?.resume) {
 					try {
-						const resumed = await connection.resumeSession(saved.acpSessionId, cwd, mcpServers, signal);
+						const resumed = await connection.resumeSession(saved.acpSessionId, cwd, mcpServers, signal, meta);
 						session = { sessionId: saved.acpSessionId, ...resumed };
 						restored = true;
 					} catch {
@@ -837,7 +844,7 @@ export class AntigravityRuntime {
 				}
 				if (!session && initialize.agentCapabilities?.loadSession === true) {
 					try {
-						const loaded = await connection.loadSession(saved.acpSessionId, cwd, mcpServers, signal);
+						const loaded = await connection.loadSession(saved.acpSessionId, cwd, mcpServers, signal, meta);
 						session = { sessionId: saved.acpSessionId, ...loaded };
 						restored = true;
 					} catch {
@@ -845,7 +852,7 @@ export class AntigravityRuntime {
 					}
 				}
 			}
-			session ??= await connection.newSession(cwd, signal, mcpServers);
+			session ??= await connection.newSession(cwd, signal, mcpServers, meta);
 			this.assertEpoch(epoch);
 			const mode = this.permissionMode;
 			if (!supportsMode(session, mode)) {
@@ -912,6 +919,7 @@ export class AntigravityRuntime {
 	private persistBinding(binding: Binding): void {
 		if (!binding.piSessionId) return;
 		if (binding.needsReconstruction) { this.sessionStore?.remove(binding.piSessionId); return; }
+		const nativeTools = nativeToolsKey(this.nativeTools);
 		this.sessionStore?.save({
 			piSessionId: binding.piSessionId,
 			acpSessionId: binding.session.sessionId,
@@ -922,6 +930,7 @@ export class AntigravityRuntime {
 			...(binding.expectedAssistantFingerprint
 				? { expectedAssistantFingerprint: binding.expectedAssistantFingerprint }
 				: {}),
+			...(nativeTools ? { nativeTools } : {}),
 			lastActive: Date.now(),
 		});
 	}
@@ -1082,6 +1091,16 @@ function adaptPromptToCapabilities(parts: PromptParts, initialize: InitializeRes
 
 function hasUsableLocalAuth(health: AntigravityAuthHealth): boolean {
 	return health.status === "api-key-env" || health.status === "oauth-refreshable";
+}
+
+function sessionMeta(nativeTools: NativeTools): Record<string, unknown> | undefined {
+	if (nativeTools === "all") return undefined;
+	return { antigravity: { enabledTools: nativeTools === "none" ? [] : nativeTools } };
+}
+
+// Saved sessions record the filter they were created under; undefined means every builtin.
+function nativeToolsKey(nativeTools: NativeTools): string | undefined {
+	return nativeTools === "all" ? undefined : JSON.stringify(nativeTools === "none" ? [] : nativeTools);
 }
 
 function supportsMode(session: SessionState, mode: PermissionMode): boolean {
