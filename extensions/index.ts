@@ -31,12 +31,17 @@ import {
 	AntigravityRuntime,
 	PERMISSION_RESULT_KIND,
 	PERMISSION_TOOL_NAME,
+	type AntigravityConnectionFactory,
 	type PermissionToolResult,
 } from "../src/runtime.js";
 import { runSetupWizard } from "../src/wizard.js";
 
 export default function antigravityAcpExtension(pi: ExtensionAPI): void {
-	const runtime = new AntigravityRuntime(undefined, loadConfig().permissions);
+	registerAntigravityAcp(pi);
+}
+
+export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: AntigravityConnectionFactory): void {
+	const runtime = new AntigravityRuntime(connectionFactory, loadConfig().permissions);
 	const { provider } = createAntigravityProvider(runtime);
 	pi.registerProvider(provider);
 
