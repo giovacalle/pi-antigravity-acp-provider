@@ -170,11 +170,12 @@ export class AntigravityAcpConnection {
 		cwd: string,
 		signal?: AbortSignal,
 		mcpServers: McpServer[] = [],
+		meta?: Record<string, unknown>,
 	): Promise<AcpNewSessionResponse> {
 		await this.initialize();
 		const response = await this.withAbort(
 			this.withDeadline(
-				this.connection.newSession({ cwd, mcpServers }),
+				this.connection.newSession({ cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }),
 				this.operationTimeoutMs,
 				"session/new",
 			),
@@ -193,11 +194,12 @@ export class AntigravityAcpConnection {
 		cwd: string,
 		mcpServers: McpServer[] = [],
 		signal?: AbortSignal,
+		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
 		await this.initialize();
 		const response = await this.withAbort(
 			this.withDeadline(
-				this.connection.loadSession({ sessionId, cwd, mcpServers }),
+				this.connection.loadSession({ sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }),
 				this.operationTimeoutMs,
 				"session/load",
 			),
@@ -211,11 +213,12 @@ export class AntigravityAcpConnection {
 		cwd: string,
 		mcpServers: McpServer[] = [],
 		signal?: AbortSignal,
+		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
 		await this.initialize();
 		const response = await this.withAbort(
 			this.withDeadline(
-				this.connection.resumeSession({ sessionId, cwd, mcpServers }),
+				this.connection.resumeSession({ sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }),
 				this.operationTimeoutMs,
 				"session/resume",
 			),

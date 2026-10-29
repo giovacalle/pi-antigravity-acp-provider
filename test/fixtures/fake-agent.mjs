@@ -41,7 +41,7 @@ for await (const line of rl) {
 	}
 	const { id, method, params } = message;
 	if (process.env.FAKE_AGENT_LOG_FILE && method) fs.appendFileSync(process.env.FAKE_AGENT_LOG_FILE,
-		JSON.stringify({ method, ...(method === "session/prompt" ? { prompt: params.prompt, mode } : {}), ...(method === "session/set_mode" ? { modeId: params.modeId } : {}), ...(method === "session/new" ? { cwd: params.cwd } : {}) }) + "\n");
+		JSON.stringify({ method, ...(method === "session/prompt" ? { prompt: params.prompt, mode } : {}), ...(method === "session/set_mode" ? { modeId: params.modeId } : {}), ...(method === "session/new" ? { cwd: params.cwd } : {}), ...(["session/new", "session/load", "session/resume"].includes(method) && params && "_meta" in params ? { _meta: params._meta } : {}) }) + "\n");
 	if (id === "permission-1" && method === undefined) {
 		if (permissionPromptId === undefined) continue;
 		const decision = message.result?.outcome?.outcome ?? "cancelled";
