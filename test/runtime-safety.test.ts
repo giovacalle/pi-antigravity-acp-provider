@@ -150,6 +150,23 @@ describe("session lifecycle", () => {
 		await Promise.all(connections.map((connection) => connection.process.exited));
 		expect(connections).toHaveLength(3);
 	});
+
+	it("resumes a one-off request's parked permission and then drops its binding", async () => {
+		const { runtime, connections } = setup();
+		const options = { sessionId: randomUUID(), cacheRetention: "none" as const, apiKey: "test-key" };
+		const messages = [user("request permission")];
+		const first = await drain(runtime.stream(model, { messages }, options));
+		const call = first.content.find((block) => block.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("missing permission tool call");
+
+		const second = await drain(runtime.stream(model, { messages: [...messages, first, { role: "toolResult", toolCallId: call.id,
+			toolName: PERMISSION_TOOL_NAME, content: [{ type: "text", text: "Rejected" }], isError: false, timestamp: 2,
+			details: { kind: PERMISSION_RESULT_KIND, requestId: call.id, optionId: "reject-once", cancelled: false } }] }, options));
+
+		expect(second.stopReason).toBe("stop");
+		expect(connections).toHaveLength(1);
+		expect((await runtime.snapshot()).bindings).toBe(0);
+	});
 });
 
 describe("instruction updates during continuations", () => {
