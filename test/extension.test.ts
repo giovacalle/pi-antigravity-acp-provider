@@ -118,6 +118,23 @@ describe("extension entry point", () => {
 		expect(result.details).toMatchObject({ requestId: call.id, optionId: "allow-once", cancelled: false });
 	});
 
+	it("starts each ACP session in its Pi session's working directory", async () => {
+		const { pi } = await load("parent");
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "acp-session-cwd-"));
+		try {
+			await pi.emit("session_start", { reason: "startup" }, createFakeContext({ sessionId: "x", cwd }));
+
+			await stream([user("hello")], "x");
+			await stream([user("hello")], "y");
+
+			const sessions = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { method: string; cwd?: string })
+				.filter((entry) => entry.method === "session/new");
+			expect(sessions.map((entry) => entry.cwd)).toEqual([cwd, process.cwd()]);
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("shares one provider across loads and closes it when the last instance quits", async () => {
 		const instances = [await load("a"), await load("b"), await load("c")];
 		expect(new Set(instances.map(({ pi }) => pi.providers[0])).size).toBe(1);

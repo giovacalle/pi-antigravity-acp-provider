@@ -211,6 +211,7 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		runtime.setSessionCwd(ctx.sessionManager.getSessionId(), ctx.cwd);
 		if (loadConfig().runtimeUpdates !== "notify") return;
 		try {
 			const update = await checkAntigravityAcpUpdate();
