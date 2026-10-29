@@ -61,8 +61,7 @@ async function load(sessionId: string) {
 	return { pi, ctx };
 }
 
-function stream(messages: Context["messages"], sessionId: string) {
-	const provider = registry.get("antigravity-acp");
+function stream(messages: Context["messages"], sessionId: string, provider = registry.get("antigravity-acp")) {
 	if (!provider) throw new Error("antigravity-acp provider is not registered");
 	return provider.streamSimple(model, normalizeContext({ messages }), { sessionId, apiKey: "test-key" }).result();
 }
@@ -76,8 +75,7 @@ describe("extension entry point", () => {
 		expect([...pi.commands.keys()]).toEqual(["antigravity-acp", "gemini-acp"]);
 	});
 
-	// Known bug: each load builds its own runtime and the last one owns the provider.
-	it.fails("keeps the parent session usable after a child instance shuts down", async () => {
+	it("keeps the parent session usable after a child instance shuts down", async () => {
 		await load("parent");
 		const child = await load("child");
 		const first = await stream([user("hello")], "parent");
@@ -87,5 +85,32 @@ describe("extension entry point", () => {
 
 		const second = await stream([user("hello"), first, user("next", 2)], "parent");
 		expect(second.stopReason).toBe("stop");
+	});
+
+	it("resolves a permission parked through one instance with another instance's permission tool", async () => {
+		const parent = await load("parent");
+		const child = await load("child");
+		const parked = await stream([user("request permission")], "parent", parent.pi.providers[0]);
+		const call = parked.content.find((block) => block.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("missing permission tool call");
+
+		const ctx = createFakeContext({ sessionId: "child", selectAnswer: (labels) => labels[0] });
+		const tool = child.pi.tools.get(PERMISSION_TOOL_NAME);
+		if (!tool) throw new Error("missing permission tool");
+		const result = await tool.execute("call", { requestId: call.id }, undefined, undefined, ctx as never);
+
+		expect(result.details).toMatchObject({ requestId: call.id, optionId: "allow-once", cancelled: false });
+	});
+
+	it("shares one provider across loads and closes it when the last instance quits", async () => {
+		const instances = [await load("a"), await load("b"), await load("c")];
+		expect(new Set(instances.map(({ pi }) => pi.providers[0])).size).toBe(1);
+		await stream([user("hello")], "a");
+		await stream([user("hello")], "b");
+		expect(connections.length).toBeGreaterThan(0);
+
+		for (const { pi, ctx } of loaded.splice(0)) await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+
+		expect(connections.every((connection) => !connection.process.alive)).toBe(true);
 	});
 });
