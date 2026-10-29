@@ -155,6 +155,7 @@ export class AntigravityRuntime {
 	private bindingEpoch = 0;
 	private readonly activeConnections = new Set<AntigravityAcpConnection>();
 	private readonly queues = new Map<string, Promise<void>>();
+	private readonly sessionCwds = new Map<string, string>();
 	private modeChanges = Promise.resolve();
 
 	private readonly connectionFactory: AntigravityConnectionFactory;
@@ -406,9 +407,15 @@ export class AntigravityRuntime {
 		return this.closePromise ??= this.closeBindings();
 	}
 
+	/** Sets the working directory for a Pi session's future ACP session; unset sessions use process.cwd(). */
+	setSessionCwd(piSessionId: string, cwd: string): void {
+		this.sessionCwds.set(piSessionId, cwd);
+	}
+
 	/** Closes one Pi session's binding but keeps its saved record so a later turn can resume it. */
 	async closeSession(piSessionId: string): Promise<void> {
 		const key = `sid:${piSessionId}`;
+		this.sessionCwds.delete(piSessionId);
 		this.queues.delete(key);
 		const binding = await this.bindings.get(key)?.catch(() => undefined);
 		if (!binding) return;
@@ -777,7 +784,8 @@ export class AntigravityRuntime {
 		slot: symbol,
 		signal?: AbortSignal,
 	): Promise<Binding> {
-		const cwd = process.cwd();
+		const piSessionId = key.startsWith("sid:") ? key.slice(4) : undefined;
+		const cwd = (piSessionId ? this.sessionCwds.get(piSessionId) : undefined) ?? process.cwd();
 		let binding: Binding | undefined;
 		let bridge: PiMcpBridge | undefined;
 		const epoch = this.bindingEpoch;
@@ -805,7 +813,6 @@ export class AntigravityRuntime {
 				mcpServer = await bridge.start();
 			}
 			const mcpServers = mcpServer ? [mcpServer] : [];
-			const piSessionId = key.startsWith("sid:") ? key.slice(4) : undefined;
 			const saved = piSessionId ? this.sessionStore?.get(piSessionId) : undefined;
 			let session: AcpNewSessionResponse | undefined;
 			let restored = false;
