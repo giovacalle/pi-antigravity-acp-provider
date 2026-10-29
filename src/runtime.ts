@@ -33,7 +33,7 @@ import {
 	PERMISSION_TOOL_NAME,
 } from "./constants.js";
 export { MANAGED_AUTH_MARKER, PERMISSION_RESULT_KIND, PERMISSION_TOOL_NAME } from "./constants.js";
-import { mapSessionUpdate } from "./acp/events.js";
+import { mapSessionUpdate, type ToolCallEntry } from "./acp/events.js";
 import { ensureAntigravityAcpReady } from "./acp/setup.js";
 import { HeadlessOAuthRelay, shouldUseHeadlessOAuth } from "./acp/headless-oauth.js";
 import {
@@ -88,6 +88,7 @@ interface Binding {
 	writer: PiEventWriter | undefined;
 	permission: PendingPermission | undefined;
 	pendingTools: Map<string, PendingPiTool>;
+	toolCalls: Map<string, ToolCallEntry>;
 	toolBatchTimer: ReturnType<typeof setTimeout> | undefined;
 	bridge: PiMcpBridge | undefined;
 	toolFingerprint: string;
@@ -877,6 +878,7 @@ export class AntigravityRuntime {
 				writer,
 				permission: undefined,
 				pendingTools: new Map(),
+				toolCalls: new Map(),
 				toolBatchTimer: undefined,
 				bridge,
 				toolFingerprint: piToolFingerprint(tools),
@@ -994,7 +996,7 @@ export class AntigravityRuntime {
 			return;
 		}
 		if (!binding.writer) return;
-		for (const activity of mapSessionUpdate(notification)) {
+		for (const activity of mapSessionUpdate(notification, binding.toolCalls)) {
 			if (activity.type === "text") binding.writer.text(activity.delta);
 			else if (activity.type === "thought") binding.writer.thinking(activity.delta);
 			else if (activity.type === "tool" || activity.type === "plan") binding.writer.thinking(activity.text);

@@ -7,7 +7,12 @@ export type AcpActivity =
 	| { type: "plan"; text: string }
 	| { type: "unknown"; updateType: string };
 
-export function mapSessionUpdate(notification: SessionNotification): AcpActivity[] {
+export interface ToolCallEntry {
+	mcp: boolean;
+	title: string;
+}
+
+export function mapSessionUpdate(notification: SessionNotification, toolCalls: Map<string, ToolCallEntry>): AcpActivity[] {
 	const update = notification.update;
 	switch (update.sessionUpdate) {
 		case "agent_message_chunk":
@@ -18,20 +23,18 @@ export function mapSessionUpdate(notification: SessionNotification): AcpActivity
 			return update.content.type === "text"
 				? [{ type: "thought", delta: update.content.text }]
 				: [{ type: "unknown", updateType: `agent_thought:${update.content.type}` }];
-		case "tool_call": {
-			const status = update.status ? ` — ${update.status}` : "";
-			return [{ type: "tool", text: `\n[Antigravity tool: ${clean(update.title)}${status}]\n` }];
-		}
+		case "tool_call":
+			// Remembered by id: agy's terminal update carries neither _meta nor title.
+			toolCalls.set(update.toolCallId, { mcp: isMcpToolCall(update._meta), title: clean(update.title) });
+			return [];
 		case "tool_call_update": {
-			const label = update.title ? clean(update.title) : clean(update.toolCallId);
-			const status = update.status ? ` — ${update.status}` : "";
-			const details = toolContentText(update.content);
-			return [
-				{
-					type: "tool",
-					text: `\n[Antigravity tool update: ${label}${status}]${details ? `\n${details}\n` : "\n"}`,
-				},
-			];
+			if (update.status !== "completed" && update.status !== "failed") return [];
+			const seen = toolCalls.get(update.toolCallId);
+			toolCalls.delete(update.toolCallId);
+			// Pi's own tools arrive through the MCP bridge and are already real Pi tool calls.
+			if (seen?.mcp || isMcpToolCall(update._meta)) return [];
+			const title = update.title ? clean(update.title) : seen?.title ?? clean(update.toolCallId);
+			return [{ type: "tool", text: `\n[Antigravity tool: ${title} — ${update.status}]\n` }];
 		}
 		case "plan": {
 			const lines = update.entries.map((entry) => `- [${entry.status}] ${clean(entry.content)}`);
@@ -42,23 +45,8 @@ export function mapSessionUpdate(notification: SessionNotification): AcpActivity
 	}
 }
 
-function toolContentText(content: SessionNotification["update"] extends infer _T ? unknown : never): string {
-	if (!Array.isArray(content)) return "";
-	const output: string[] = [];
-	for (const item of content.slice(0, 8)) {
-		if (!item || typeof item !== "object") continue;
-		const record = item as Record<string, unknown>;
-		if (record.type === "diff") {
-			const path = typeof record.path === "string" ? clean(record.path) : "file";
-			output.push(`[diff: ${path}]`);
-		} else if (record.type === "content") {
-			const block = record.content as Record<string, unknown> | undefined;
-			if (block?.type === "text" && typeof block.text === "string") {
-				output.push(clean(block.text).slice(0, 2_000));
-			}
-		}
-	}
-	return output.join("\n").slice(0, 4_000);
+function isMcpToolCall(meta: { [key: string]: unknown } | null | undefined): boolean {
+	return meta?.is_mcp_tool_call === true;
 }
 
 function clean(value: string): string {
