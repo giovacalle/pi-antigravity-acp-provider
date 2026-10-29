@@ -5,6 +5,7 @@ export type AcpActivity =
 	| { type: "thought"; delta: string }
 	| { type: "tool"; text: string }
 	| { type: "plan"; text: string }
+	| { type: "usage"; used: number }
 	| { type: "unknown"; updateType: string };
 
 export interface ToolCallEntry {
@@ -40,6 +41,9 @@ export function mapSessionUpdate(notification: SessionNotification, toolCalls: M
 			const lines = update.entries.map((entry) => `- [${entry.status}] ${clean(entry.content)}`);
 			return lines.length ? [{ type: "plan", text: `\n[Antigravity plan]\n${lines.join("\n")}\n` }] : [];
 		}
+		case "usage_update":
+			// Sent once per inference with the context size after it; session setup reports 0.
+			return update.used > 0 ? [{ type: "usage", used: update.used }] : [];
 		default:
 			return [{ type: "unknown", updateType: update.sessionUpdate }];
 	}

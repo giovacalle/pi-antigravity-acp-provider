@@ -178,6 +178,28 @@ describe("eager Pi tools", () => {
 	});
 });
 
+describe("context size from usage_update", () => {
+	it("reports each message's context size instead of the turn's summed usage", async () => {
+		const { runtime } = setup();
+		const first = await drain(runtime.stream(model, { tools, messages: [user("bridge usage")] }, { sessionId: "usage", apiKey: "test-key" }));
+		expect(first.stopReason).toBe("toolUse");
+		expect(first.usage.totalTokens).toBe(1000);
+		const call = first.content.find((block) => block.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("missing call");
+		const final = await drain(runtime.stream(model, { tools, messages: [user("bridge usage"), first,
+			{ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "done" }], isError: false, timestamp: 2 },
+		] }, { sessionId: "usage", apiKey: "test-key" }));
+		expect(final.stopReason).toBe("stop");
+		expect(final.usage).toMatchObject({ input: 2400, output: 200, totalTokens: 1800 });
+	});
+
+	it("removes the double-counted cache read on a single-inference prompt", async () => {
+		const { runtime } = setup();
+		const message = await turn(runtime, [user("usage single")]);
+		expect(message.usage).toMatchObject({ input: 600, cacheRead: 400, totalTokens: 1200 });
+	});
+});
+
 describe("session lifecycle", () => {
 	it("closes only the ending session and keeps its saved record", async () => {
 		const fixture = setup();
