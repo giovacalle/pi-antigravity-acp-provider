@@ -427,13 +427,11 @@ export class AntigravityRuntime {
 		if (this.ensureAgent) await ensureAntigravityAcpReady();
 		await this.modeChanges;
 		this.assertEpoch(epoch);
-		// One-off requests (e.g. compaction summaries) never reuse, keep, or save a session.
+		// One-off requests (e.g. compaction summaries) never keep or save a session.
 		const persistent = Boolean(options.sessionId) && options.cacheRetention !== "none";
 		const key = persistent
 			? `sid:${options.sessionId}`
-			: options.sessionId
-				? `ephemeral:${crypto.randomUUID()}`
-				: (this.findContinuationKey(context) ?? `ephemeral:${crypto.randomUUID()}`);
+			: (this.findContinuationKey(context) ?? `ephemeral:${crypto.randomUUID()}`);
 		const tools = context.tools ?? [];
 		const acpModelId = resolveAcpModelId(model, options.reasoning);
 		let binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
