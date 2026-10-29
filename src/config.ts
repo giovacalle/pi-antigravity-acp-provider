@@ -5,12 +5,15 @@ import path from "node:path";
 export type PermissionMode = "default" | "auto_edit" | "yolo";
 export type RuntimeUpdateMode = "automatic" | "notify" | "manual";
 export type ToolActivityMode = "off" | "compact" | "full";
+// Antigravity builtin tools to enable: every one, none, or the listed names.
+export type NativeTools = "all" | "none" | string[];
 
 export interface AntigravityAcpConfig {
 	permissions: PermissionMode;
 	runtimeUpdates: RuntimeUpdateMode;
 	toolActivity: ToolActivityMode;
 	nativeWorkflows: boolean;
+	nativeTools: NativeTools;
 }
 
 export function resolvePiAgentDir(): string {
@@ -58,17 +61,19 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 			runtimeUpdates?: unknown;
 			toolActivity?: unknown;
 			nativeWorkflows?: unknown;
+			nativeTools?: unknown;
 		};
 		return {
 			permissions: isPermissionMode(parsed.permissions) ? parsed.permissions : "yolo",
 			runtimeUpdates: isRuntimeUpdateMode(parsed.runtimeUpdates) ? parsed.runtimeUpdates : "automatic",
 			toolActivity: isToolActivityMode(parsed.toolActivity) ? parsed.toolActivity : "compact",
 			nativeWorkflows: parsed.nativeWorkflows === true,
+			nativeTools: isNativeTools(parsed.nativeTools) ? parsed.nativeTools : "all",
 		};
 	} catch {
 		// Missing or malformed configuration uses the documented defaults.
 	}
-	return { permissions: "yolo", runtimeUpdates: "automatic", toolActivity: "compact", nativeWorkflows: false };
+	return { permissions: "yolo", runtimeUpdates: "automatic", toolActivity: "compact", nativeWorkflows: false, nativeTools: "all" };
 }
 
 export function savePermissionMode(mode: PermissionMode, file = resolveConfigPath()): void {
@@ -127,6 +132,11 @@ export function isRuntimeUpdateMode(value: unknown): value is RuntimeUpdateMode 
 
 export function isToolActivityMode(value: unknown): value is ToolActivityMode {
 	return value === "off" || value === "compact" || value === "full";
+}
+
+function isNativeTools(value: unknown): value is NativeTools {
+	return value === "all" || value === "none" ||
+		(Array.isArray(value) && value.every((name) => typeof name === "string" && name.length > 0));
 }
 
 export function permissionModeLabel(mode: PermissionMode): string {

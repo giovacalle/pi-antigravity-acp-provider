@@ -243,7 +243,7 @@ describe("extension entry point", () => {
 		expect(ctx.ui.notify.mock.calls.at(-1)).toEqual(["Antigravity runtime updates: notify", "info"]);
 		await command.handler("permissions auto-edit", ctx as never);
 		expect(ctx.ui.notify.mock.calls.at(-1)).toEqual(["Antigravity permission mode: auto-edit.", "info"]);
-		expect(loadConfig()).toEqual({ permissions: "auto_edit", runtimeUpdates: "notify", toolActivity: "off", nativeWorkflows: false });
+		expect(loadConfig()).toEqual({ permissions: "auto_edit", runtimeUpdates: "notify", toolActivity: "off", nativeWorkflows: false, nativeTools: "all" });
 	});
 });
 

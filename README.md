@@ -103,6 +103,7 @@ Settings live in `$PI_CODING_AGENT_DIR/antigravity-acp-provider/config.json` (de
 - `runtimeUpdates`: `automatic` (default), `notify`, or `manual` — see [`docs/RUNTIME-UPDATES.md`](docs/RUNTIME-UPDATES.md)
 - `toolActivity`: `compact` (default), `off`, or `full`
 - `nativeWorkflows`: `false` (default) — disables Antigravity's `run_workflow` tool via session metadata so it does not generate `skills/system/run-workflow/SKILL.md` in your workspace (requires a runtime supporting `disabledTools`; see [upstream #1330](https://github.com/google-antigravity/antigravity-cli/issues/1330)). Set to `true` and restart Pi to enable it.
+- `nativeTools`: `"all"` (default), `"none"`, or a list of builtin names such as `["view_file", "search_directory"]` — which Antigravity builtin tools the model may use. Pi tools are unaffected; MCP resource tools stay available with `"none"`. The filter is stored with each ACP session, so after a change a saved session is not resumed and its next turn rebuilds from Pi history. With `"none"`, file, shell and web actions go through `pi_` tools and Pi hooks.
 
 Saved ACP session bindings are stored beside `config.json` in `sessions.json`. Utility sessions (model discovery, quota, auth) run in `utility-cwd/` beside the config so they do not write into your workspace.
 

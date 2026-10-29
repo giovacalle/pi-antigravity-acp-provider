@@ -24,6 +24,7 @@ export function acquireSharedRuntime(connectionFactory?: AntigravityConnectionFa
 		const config = loadConfig();
 		const runtime = new AntigravityRuntime(connectionFactory, config.permissions, undefined, {
 			toolActivityMode: config.toolActivity,
+			nativeTools: config.nativeTools,
 		});
 		shared = { runtime, provider: createAntigravityProvider(runtime).provider, refs: 0, version: PACKAGE_VERSION };
 		slots[KEY] = shared;

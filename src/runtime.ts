@@ -51,7 +51,7 @@ import {
 	type ToolOmission,
 	type PiToolInvocation,
 } from "./mcp/bridge.js";
-import { resolveUtilityCwd, type PermissionMode, type ToolActivityMode } from "./config.js";
+import { resolveUtilityCwd, type NativeTools, type PermissionMode, type ToolActivityMode } from "./config.js";
 import { resolveAcpModelId } from "./models.js";
 import { type PromptParts, buildPromptParts, currentSystemInstructions } from "./stream/context.js";
 import { PiEventWriter } from "./stream/pi-events.js";
@@ -136,12 +136,14 @@ export interface AntigravityRuntimeOptions {
 	maxBindings?: number;
 	idleMs?: number;
 	toolActivityMode?: ToolActivityMode;
+	nativeTools?: NativeTools;
 }
 
 export interface RuntimeSnapshot {
 	bindings: number;
 	permissionMode: PermissionMode;
 	toolActivityMode: ToolActivityMode;
+	nativeTools: NativeTools;
 	metrics: ReturnType<RuntimeMetrics["snapshot"]>;
 	processes: Array<{
 		key: string;
@@ -194,6 +196,7 @@ export class AntigravityRuntime {
 	private toolActivityMode: ToolActivityMode;
 	private quotaCache: { credentialId: string; snapshot: AntigravityQuotaSnapshot } | undefined;
 	private quotaInFlight: { epoch: number; credentialId: string; snapshot: Promise<AntigravityQuotaSnapshot> } | undefined;
+	private readonly nativeTools: NativeTools;
 
 	constructor(
 		connectionFactory?: AntigravityConnectionFactory,
@@ -202,6 +205,7 @@ export class AntigravityRuntime {
 		options?: AntigravityRuntimeOptions,
 	) {
 		this.connectionFactory = connectionFactory ?? ((connectionOptions) => new AntigravityAcpConnection(connectionOptions));
+		this.nativeTools = options?.nativeTools ?? "all";
 		this.ensureAgent = connectionFactory === undefined;
 		this.permissionMode = permissionMode;
 		this.toolActivityMode = options?.toolActivityMode ?? "compact";
@@ -519,6 +523,7 @@ export class AntigravityRuntime {
 			bindings: processes.length,
 			permissionMode: this.permissionMode,
 			toolActivityMode: this.toolActivityMode,
+			nativeTools: this.nativeTools,
 			metrics: this.metrics.snapshot(),
 			processes,
 		};
@@ -952,10 +957,13 @@ export class AntigravityRuntime {
 			const saved = piSessionId ? this.sessionStore?.get(piSessionId) : undefined;
 			let session: AcpNewSessionResponse | undefined;
 			let restored = false;
-			if (saved?.cwd === cwd && saved.credentialId === credentialId) {
+			const meta = sessionMeta(this.nativeTools);
+			// Antigravity persists the builtin filter per session and keeps it on resume, so a session
+			// saved under another filter is replaced rather than restored.
+			if (saved?.cwd === cwd && saved.credentialId === credentialId && saved.nativeTools === nativeToolsKey(this.nativeTools)) {
 				if (initialize.agentCapabilities?.sessionCapabilities?.resume) {
 					try {
-						const resumed = await connection.resumeSession(saved.acpSessionId, cwd, mcpServers, signal);
+						const resumed = await connection.resumeSession(saved.acpSessionId, cwd, mcpServers, signal, meta);
 						session = { sessionId: saved.acpSessionId, ...resumed };
 						restored = true;
 					} catch {
@@ -964,7 +972,7 @@ export class AntigravityRuntime {
 				}
 				if (!session && initialize.agentCapabilities?.loadSession === true) {
 					try {
-						const loaded = await connection.loadSession(saved.acpSessionId, cwd, mcpServers, signal);
+						const loaded = await connection.loadSession(saved.acpSessionId, cwd, mcpServers, signal, meta);
 						session = { sessionId: saved.acpSessionId, ...loaded };
 						restored = true;
 					} catch {
@@ -972,7 +980,7 @@ export class AntigravityRuntime {
 					}
 				}
 			}
-			session ??= await connection.newSession(cwd, signal, mcpServers);
+			session ??= await connection.newSession(cwd, signal, mcpServers, meta);
 			this.assertSessionEpoch(key, epoch, sessionEpoch);
 			const mode = this.permissionMode;
 			const modeId = permissionModeId(session, mode);
@@ -1052,6 +1060,7 @@ export class AntigravityRuntime {
 	private persistBinding(binding: Binding): void {
 		if (!binding.piSessionId) return;
 		if (binding.needsReconstruction) { this.sessionStore?.remove(binding.piSessionId); return; }
+		const nativeTools = nativeToolsKey(this.nativeTools);
 		this.sessionStore?.save({
 			piSessionId: binding.piSessionId,
 			acpSessionId: binding.session.sessionId,
@@ -1063,6 +1072,7 @@ export class AntigravityRuntime {
 			...(binding.expectedAssistantFingerprint
 				? { expectedAssistantFingerprint: binding.expectedAssistantFingerprint }
 				: {}),
+			...(nativeTools ? { nativeTools } : {}),
 			lastActive: Date.now(),
 		});
 	}
@@ -1335,6 +1345,16 @@ function adaptPromptToCapabilities(parts: PromptParts, initialize: InitializeRes
 		output.push(block);
 	}
 	return { ...parts, prompt: output };
+}
+
+function sessionMeta(nativeTools: NativeTools): Record<string, unknown> | undefined {
+	if (nativeTools === "all") return undefined;
+	return { antigravity: { enabledTools: nativeTools === "none" ? [] : nativeTools } };
+}
+
+// Saved sessions record the filter they were created under; undefined means every builtin.
+function nativeToolsKey(nativeTools: NativeTools): string | undefined {
+	return nativeTools === "all" ? undefined : JSON.stringify(nativeTools === "none" ? [] : nativeTools);
 }
 
 function permissionView(permission: PendingPermission): PermissionView {

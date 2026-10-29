@@ -12,6 +12,7 @@ export interface SavedSessionRecord {
 	messageCount: number;
 	historyFingerprint: string;
 	expectedAssistantFingerprint?: string;
+	nativeTools?: string;
 	lastActive: number;
 }
 
@@ -84,6 +85,7 @@ function validRecord(value: unknown): value is SavedSessionRecord {
 		typeof record.historyFingerprint === "string" &&
 		(record.expectedAssistantFingerprint === undefined ||
 			typeof record.expectedAssistantFingerprint === "string") &&
+		(record.nativeTools === undefined || typeof record.nativeTools === "string") &&
 		typeof record.lastActive === "number" &&
 		Number.isFinite(record.lastActive)
 	);

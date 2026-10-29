@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AntigravityAcpConnection } from "../src/acp/connection.js";
 import { AcpSessionStore } from "../src/acp/session-store.js";
 import { AntigravityRuntime, PERMISSION_TOOL_NAME, PERMISSION_RESULT_KIND } from "../src/runtime.js";
-import type { PermissionMode } from "../src/config.js";
+import type { NativeTools, PermissionMode } from "../src/config.js";
 import type { AntigravityQuotaSnapshot } from "../src/acp/usage-quota.js";
 import type { PiEventWriter } from "../src/stream/pi-events.js";
 import { piToolFingerprint, PiMcpBridge } from "../src/mcp/bridge.js";
@@ -31,7 +31,7 @@ function setup(
 	scenario?: string,
 	mode: PermissionMode = "yolo",
 	store?: AcpSessionStore,
-	runtimeOptions?: { maxBindings?: number; idleMs?: number; modeIds?: string[]; restoredModeIds?: string[]; emitModeUpdates?: boolean },
+	runtimeOptions?: { nativeTools?: NativeTools; maxBindings?: number; idleMs?: number; modeIds?: string[]; restoredModeIds?: string[]; emitModeUpdates?: boolean },
 ) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-runtime-safety-")); roots.push(root);
 	const log = path.join(root, "calls.jsonl"); fs.writeFileSync(log, "");
@@ -42,7 +42,7 @@ function setup(
 		connections.push(connection); return connection;
 	}, mode, store, runtimeOptions);
 	runtimes.push(runtime);
-	const entries = () => fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method: string; prompt?: unknown; mode?: string });
+	const entries = () => fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method: string; prompt?: unknown; mode?: string; params?: { _meta?: unknown } });
 	return { root, runtime, connections, entries };
 }
 async function drain(writer: PiEventWriter) { for await (const _event of writer.stream) void _event; return writer.message; }
@@ -703,6 +703,43 @@ describe("abort cleanup", () => {
 		]);
 		expect(message.stopReason).toBe("error");
 		expect(message.errorMessage).toContain("without completing");
+	});
+});
+
+describe("native tool filter", () => {
+	it("sends an empty builtin filter on session/new when native tools are off", async () => {
+		const { runtime, entries } = setup(undefined, "yolo", undefined, { nativeTools: "none" });
+		expect((await turn(runtime, [user("hello")])).stopReason).toBe("stop");
+		expect(entries().find((entry) => entry.method === "session/new")?.params?._meta).toEqual({ antigravity: { disabledTools: ["run_workflow"], enabledTools: [] } });
+		expect((await runtime.snapshot()).nativeTools).toBe("none");
+	});
+
+	it("sends only the workflow filter by default", async () => {
+		const { runtime, entries } = setup();
+		await turn(runtime, [user("hello")]);
+		expect(entries().find((entry) => entry.method === "session/new")?.params?._meta).toEqual({ antigravity: { disabledTools: ["run_workflow"] } });
+		expect((await runtime.snapshot()).nativeTools).toBe("all");
+	});
+
+	it("resends the filter when resuming a session saved under the same filter", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const first = setup(undefined, "yolo", store, { nativeTools: "none" });
+		const message = await turn(first.runtime, [user("hello")]); await first.runtime.close();
+		const second = setup(undefined, "yolo", store, { nativeTools: "none" });
+		expect((await turn(second.runtime, [user("hello"), message, user("next", 2)])).stopReason).toBe("stop");
+		expect(second.entries().find((entry) => entry.method === "session/resume")?.params?._meta).toEqual({ antigravity: { disabledTools: ["run_workflow"], enabledTools: [] } });
+	});
+
+	it("starts a fresh session instead of resuming one saved under a different filter", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const first = setup(undefined, "yolo", store, { nativeTools: "none" });
+		const message = await turn(first.runtime, [user("hello")]); await first.runtime.close();
+		const second = setup(undefined, "yolo", store);
+		expect((await turn(second.runtime, [user("hello"), message, user("next", 2)])).stopReason).toBe("stop");
+		expect(second.entries().some((entry) => entry.method === "session/resume" || entry.method === "session/load")).toBe(false);
+		expect(second.entries().filter((entry) => entry.method === "session/new")).toHaveLength(1);
 	});
 });
 

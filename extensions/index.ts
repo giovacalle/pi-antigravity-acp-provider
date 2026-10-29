@@ -258,6 +258,7 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 					`Credential storage (preflight): ${describeCredentialStorage({ env: providerAcpEnvironment() })}`,
 					`Requested permission mode: ${permissionModeLabel(snapshot.permissionMode)}`,
 					`Tool activity mode: ${snapshot.toolActivityMode}`,
+					`Native tools: ${Array.isArray(snapshot.nativeTools) ? snapshot.nativeTools.join(", ") || "none" : snapshot.nativeTools}`,
 					`Active bindings: ${snapshot.bindings}`,
 					formatMetrics(snapshot.metrics),
 					...snapshot.processes.flatMap((item) => [
