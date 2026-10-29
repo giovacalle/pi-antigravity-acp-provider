@@ -192,6 +192,7 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 					`Requested permission mode: ${permissionModeLabel(snapshot.permissionMode)}`,
 					`Active bindings: ${snapshot.bindings}`,
 					`Idle eviction: ttl=${snapshot.idleTtlMs ? `${snapshot.idleTtlMs / 1000}s` : "off"} evicted=${snapshot.evictions}`,
+					`Live session cap: ${snapshot.maxLiveSessions || "unlimited"} overflows=${snapshot.capOverflows}`,
 					formatMetrics(snapshot.metrics),
 					...snapshot.processes.flatMap((item) => [
 						`• pid=${item.pid ?? "?"} generation=${item.generation} model=${item.modelId} confirmedMode=${item.confirmedPermissionMode} alive=${item.alive} restored=${item.restored} agent=${item.agentVersion ?? "?"} mcpHttp=${item.mcpHttp} permission=${item.waitingForPermission} tools=${item.waitingForTools} idle=${Math.round(item.idleMs / 1000)}s ignoredStdoutNoise=${item.ignoredStdoutNoiseLines}`,

@@ -43,7 +43,7 @@ import {
 	type ToolOmission,
 	type PiToolInvocation,
 } from "./mcp/bridge.js";
-import { DEFAULT_IDLE_TTL_MS, type PermissionMode } from "./config.js";
+import { DEFAULT_IDLE_TTL_MS, DEFAULT_MAX_LIVE_SESSIONS, type PermissionMode } from "./config.js";
 import { resolveAcpModelId } from "./models.js";
 import { type PromptParts, buildPromptParts, currentSystemInstructions } from "./stream/context.js";
 import { PiEventWriter } from "./stream/pi-events.js";
@@ -121,6 +121,8 @@ export interface RuntimeSnapshot {
 	permissionMode: PermissionMode;
 	idleTtlMs: number;
 	evictions: number;
+	maxLiveSessions: number;
+	capOverflows: number;
 	metrics: ReturnType<RuntimeMetrics["snapshot"]>;
 	processes: Array<{
 		key: string;
@@ -162,13 +164,16 @@ export class AntigravityRuntime {
 	private readonly idleTtlMs: number;
 	private readonly idleSweep: ReturnType<typeof setInterval> | undefined;
 	private evictions = 0;
+	private readonly maxLiveSessions: number;
+	private capOverflows = 0;
 
 	constructor(
 		connectionFactory?: AntigravityConnectionFactory,
 		permissionMode: PermissionMode = "yolo",
 		sessionStore?: AcpSessionStore,
-		limits: { idleTtlMs?: number } = {},
+		limits: { idleTtlMs?: number; maxLiveSessions?: number } = {},
 	) {
+		this.maxLiveSessions = limits.maxLiveSessions ?? DEFAULT_MAX_LIVE_SESSIONS;
 		this.connectionFactory = connectionFactory ?? ((options) => new AntigravityAcpConnection(options));
 		this.ensureAgent = connectionFactory === undefined;
 		this.permissionMode = permissionMode;
@@ -384,6 +389,8 @@ export class AntigravityRuntime {
 			permissionMode: this.permissionMode,
 			idleTtlMs: this.idleTtlMs,
 			evictions: this.evictions,
+			maxLiveSessions: this.maxLiveSessions,
+			capOverflows: this.capOverflows,
 			metrics: this.metrics.snapshot(),
 			processes,
 		};
@@ -417,11 +424,27 @@ export class AntigravityRuntime {
 		const now = Date.now();
 		for (const binding of [...this.resolvedBindings]) {
 			if (now - binding.lastActivity < this.idleTtlMs || !this.isIdle(binding)) continue;
-			// Leave the set now so an overlapping sweep cannot count the same eviction twice.
-			this.resolvedBindings.delete(binding);
-			this.evictions += 1;
-			void this.dropBinding(binding.key, binding, false).catch(() => undefined);
+			void this.evict(binding);
 		}
+	}
+
+	/** Makes room for a new binding at the cap; busy sessions are never touched, so the cap may be exceeded. */
+	private async evictForCap(key: string): Promise<void> {
+		if (this.maxLiveSessions === 0 || this.resolvedBindings.size < this.maxLiveSessions) return;
+		let victim: Binding | undefined;
+		for (const binding of this.resolvedBindings) {
+			if (binding.key === key || !this.isIdle(binding)) continue;
+			if (!victim || binding.lastActivity < victim.lastActivity) victim = binding;
+		}
+		if (victim) await this.evict(victim);
+		else this.capOverflows += 1;
+	}
+
+	private evict(binding: Binding): Promise<void> {
+		// Leave the set now so an overlapping eviction cannot pick or count the same binding twice.
+		this.resolvedBindings.delete(binding);
+		this.evictions += 1;
+		return this.dropBinding(binding.key, binding, false).catch(() => undefined);
 	}
 
 	private isIdle(binding: Binding): boolean {
@@ -721,6 +744,8 @@ export class AntigravityRuntime {
 		let binding: Binding | undefined;
 		let bridge: PiMcpBridge | undefined;
 		const epoch = this.bindingEpoch;
+		await this.evictForCap(key);
+		this.assertEpoch(epoch);
 		const connection = this.createConnection({
 			cwd,
 			handlers: {

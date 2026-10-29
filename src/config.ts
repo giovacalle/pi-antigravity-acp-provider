@@ -9,9 +9,11 @@ export interface AntigravityAcpConfig {
 	permissions: PermissionMode;
 	runtimeUpdates: RuntimeUpdateMode;
 	idleTtlMs: number;
+	maxLiveSessions: number;
 }
 
 export const DEFAULT_IDLE_TTL_MS = 600_000;
+export const DEFAULT_MAX_LIVE_SESSIONS = 4;
 
 export function resolvePiAgentDir(): string {
 	const custom = process.env.PI_CODING_AGENT_DIR?.trim();
@@ -51,16 +53,20 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 			permissions?: unknown;
 			runtimeUpdates?: unknown;
 			idleTtlMs?: unknown;
+			maxLiveSessions?: unknown;
 		};
 		return {
 			permissions: isPermissionMode(parsed.permissions) ? parsed.permissions : "yolo",
 			runtimeUpdates: isRuntimeUpdateMode(parsed.runtimeUpdates) ? parsed.runtimeUpdates : "automatic",
 			idleTtlMs: isTimerDelay(parsed.idleTtlMs) ? parsed.idleTtlMs : DEFAULT_IDLE_TTL_MS,
+			maxLiveSessions: Number.isSafeInteger(parsed.maxLiveSessions) && (parsed.maxLiveSessions as number) >= 0
+				? parsed.maxLiveSessions as number
+				: DEFAULT_MAX_LIVE_SESSIONS,
 		};
 	} catch {
 		// Missing or malformed configuration uses the documented defaults.
 	}
-	return { permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: DEFAULT_IDLE_TTL_MS };
+	return { permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: DEFAULT_IDLE_TTL_MS, maxLiveSessions: DEFAULT_MAX_LIVE_SESSIONS };
 }
 
 export function savePermissionMode(mode: PermissionMode, file = resolveConfigPath()): void {

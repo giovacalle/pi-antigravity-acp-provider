@@ -23,7 +23,7 @@ afterEach(async () => {
 	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore, limits?: { idleTtlMs?: number }) {
+function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore, limits?: { idleTtlMs?: number; maxLiveSessions?: number }) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-runtime-safety-")); roots.push(root);
 	const log = path.join(root, "calls.jsonl"); fs.writeFileSync(log, "");
 	const connections: AntigravityAcpConnection[] = [];
@@ -206,6 +206,34 @@ describe("idle eviction", () => {
 		expect(snapshot.processes[0]?.waitingForPermission).toBe(true);
 		expect(snapshot.evictions).toBe(0);
 		expect(connections[0]!.process.alive).toBe(true);
+	});
+});
+
+describe("live session cap", () => {
+	it("evicts the least recently used idle session before spawning past the cap", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { maxLiveSessions: 2 });
+		for (const sessionId of ["A", "B", "C"]) expect((await turn(runtime, [user("hello")], sessionId)).stopReason).toBe("stop");
+
+		await connections[0]!.process.exited;
+		expect(connections[1]!.process.alive).toBe(true);
+		expect(connections[2]!.process.alive).toBe(true);
+		const snapshot = await runtime.snapshot();
+		expect(snapshot.bindings).toBe(2);
+		expect(snapshot.capOverflows).toBe(0);
+	});
+
+	it("exceeds the cap rather than touching busy sessions", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { maxLiveSessions: 2 });
+		for (const sessionId of ["A", "B"]) expect((await turn(runtime, [user("request permission")], sessionId)).stopReason).toBe("toolUse");
+
+		expect((await turn(runtime, [user("hello")], "C")).stopReason).toBe("stop");
+
+		const snapshot = await runtime.snapshot();
+		expect(snapshot.bindings).toBe(3);
+		expect(snapshot.capOverflows).toBe(1);
+		expect(snapshot.processes.filter((process) => process.waitingForPermission).map((process) => process.key).sort()).toEqual(["sid:A", "sid:B"]);
+		expect(connections[0]!.process.alive).toBe(true);
+		expect(connections[1]!.process.alive).toBe(true);
 	});
 });
 
