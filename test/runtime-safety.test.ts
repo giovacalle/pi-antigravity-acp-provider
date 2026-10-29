@@ -138,6 +138,46 @@ describe("native tool filter", () => {
 	});
 });
 
+describe("eager Pi tools", () => {
+	const toolTurn = (runtime: AntigravityRuntime, messages: Context["messages"]) =>
+		drain(runtime.stream(model, { tools, messages }, { sessionId: "eager", apiKey: "test-key" }));
+	const eager = { eagerMcpServers: ["pi-bridge"], mcpMaxOutputBytes: 1048576 };
+
+	it("loads the Pi bridge eagerly when tools are attached", async () => {
+		const { runtime, entries } = setup();
+		await toolTurn(runtime, [user("hello")]);
+		expect(entries().find((entry) => entry.method === "session/new")?._meta).toEqual({ antigravity: eager });
+	});
+
+	it("merges eager loading with the builtin filter", async () => {
+		const { runtime, entries } = setup(undefined, "yolo", undefined, { nativeTools: "none" });
+		await toolTurn(runtime, [user("hello")]);
+		expect(entries().find((entry) => entry.method === "session/new")?._meta).toEqual({ antigravity: { enabledTools: [], ...eager } });
+	});
+
+	it("sends no eager keys without tools", async () => {
+		const { runtime, entries } = setup();
+		await turn(runtime, [user("hello")]);
+		expect("_meta" in entries().find((entry) => entry.method === "session/new")!).toBe(false);
+	});
+
+	it("sends no eager keys when the agent lacks MCP over HTTP", async () => {
+		const { runtime, entries } = setup("no-mcp");
+		await toolTurn(runtime, [user("hello")]);
+		expect("_meta" in entries().find((entry) => entry.method === "session/new")!).toBe(false);
+	});
+
+	it("resends eager loading on resume", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const first = setup(undefined, "yolo", store);
+		const message = await toolTurn(first.runtime, [user("hello")]); await first.runtime.close();
+		const second = setup(undefined, "yolo", store);
+		expect((await toolTurn(second.runtime, [user("hello"), message, user("next", 2)])).stopReason).toBe("stop");
+		expect(second.entries().find((entry) => entry.method === "session/resume")?._meta).toEqual({ antigravity: eager });
+	});
+});
+
 describe("session lifecycle", () => {
 	it("closes only the ending session and keeps its saved record", async () => {
 		const fixture = setup();
