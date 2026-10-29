@@ -1,0 +1,91 @@
+import { normalizeContext, type Context, type Model } from "@earendil-works/pi-ai";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AntigravityAcpConnection } from "../src/acp/connection.js";
+import { PERMISSION_TOOL_NAME } from "../src/runtime.js";
+import {
+	createFakeContext,
+	createFakeExtensionApi,
+	type FakeContext,
+	type FakeExtensionApi,
+	type FakeProviderRegistry,
+} from "./helpers/fake-extension-api.js";
+
+const fakeAgent = fileURLToPath(new URL("./fixtures/fake-agent.mjs", import.meta.url));
+const model: Model<"antigravity-acp"> = { id: "gemini-test", name: "Test", api: "antigravity-acp", provider: "antigravity-acp", baseUrl: "", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000000, maxTokens: 8192 };
+const user = (content: string, timestamp = 1): Context["messages"][number] => ({ role: "user", content, timestamp });
+
+let root: string;
+let log: string;
+let registry: FakeProviderRegistry;
+let loaded: Array<{ pi: FakeExtensionApi; ctx: FakeContext }>;
+let connections: AntigravityAcpConnection[];
+
+beforeEach(() => {
+	root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-extension-"));
+	fs.mkdirSync(path.join(root, "home"));
+	fs.mkdirSync(path.join(root, "agent"));
+	log = path.join(root, "calls.jsonl");
+	fs.writeFileSync(log, "");
+	// Never read or migrate a developer's real configuration.
+	vi.stubEnv("PI_CODING_AGENT_DIR", path.join(root, "agent"));
+	vi.spyOn(os, "homedir").mockReturnValue(path.join(root, "home"));
+	registry = new Map();
+	loaded = [];
+	connections = [];
+});
+
+afterEach(async () => {
+	for (const { pi, ctx } of loaded.splice(0)) await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+	vi.restoreAllMocks();
+	vi.unstubAllEnvs();
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+// Pi loads each extension instance with a fresh module graph.
+async function load(sessionId: string) {
+	vi.resetModules();
+	const { registerAntigravityAcp } = await import("../extensions/index.js");
+	const pi = createFakeExtensionApi(registry);
+	registerAntigravityAcp(pi.api, (options) => {
+		const connection = new AntigravityAcpConnection({ ...options, command: process.execPath,
+			args: [fakeAgent], env: { ...process.env, FAKE_AGENT_LOG_FILE: log } });
+		connections.push(connection);
+		return connection;
+	});
+	const ctx = createFakeContext({ sessionId, cwd: root });
+	loaded.push({ pi, ctx });
+	return { pi, ctx };
+}
+
+function stream(messages: Context["messages"], sessionId: string) {
+	const provider = registry.get("antigravity-acp");
+	if (!provider) throw new Error("antigravity-acp provider is not registered");
+	return provider.streamSimple(model, normalizeContext({ messages }), { sessionId, apiKey: "test-key" }).result();
+}
+
+// Synthetic ACP processes only: no Google account or real agent actions.
+describe("extension entry point", () => {
+	it("registers the provider, permission tool, and commands", async () => {
+		const { pi } = await load("parent");
+		expect(registry.get("antigravity-acp")).toBe(pi.providers[0]);
+		expect(pi.tools.has(PERMISSION_TOOL_NAME)).toBe(true);
+		expect([...pi.commands.keys()]).toEqual(["antigravity-acp", "gemini-acp"]);
+	});
+
+	// Known bug: each load builds its own runtime and the last one owns the provider.
+	it.fails("keeps the parent session usable after a child instance shuts down", async () => {
+		await load("parent");
+		const child = await load("child");
+		const first = await stream([user("hello")], "parent");
+		expect(first.stopReason).toBe("stop");
+
+		await child.pi.emit("session_shutdown", { reason: "quit" }, child.ctx);
+
+		const second = await stream([user("hello"), first, user("next", 2)], "parent");
+		expect(second.stopReason).toBe("stop");
+	});
+});
