@@ -254,7 +254,6 @@ function formatMetrics(metrics: {
 	const totalTokens =
 		metrics.totals.input +
 		metrics.totals.output +
-		metrics.totals.reasoning +
 		metrics.totals.cacheRead +
 		metrics.totals.cacheWrite;
 	const quota = metrics.latestQuota;
