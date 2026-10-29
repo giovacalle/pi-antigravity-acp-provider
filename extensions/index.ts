@@ -191,9 +191,10 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 					`Credential storage (preflight): ${describeCredentialStorage()}`,
 					`Requested permission mode: ${permissionModeLabel(snapshot.permissionMode)}`,
 					`Active bindings: ${snapshot.bindings}`,
+					`Idle eviction: ttl=${snapshot.idleTtlMs ? `${snapshot.idleTtlMs / 1000}s` : "off"} evicted=${snapshot.evictions}`,
 					formatMetrics(snapshot.metrics),
 					...snapshot.processes.flatMap((item) => [
-						`• pid=${item.pid ?? "?"} generation=${item.generation} model=${item.modelId} confirmedMode=${item.confirmedPermissionMode} alive=${item.alive} restored=${item.restored} agent=${item.agentVersion ?? "?"} mcpHttp=${item.mcpHttp} permission=${item.waitingForPermission} tools=${item.waitingForTools} ignoredStdoutNoise=${item.ignoredStdoutNoiseLines}`,
+						`• pid=${item.pid ?? "?"} generation=${item.generation} model=${item.modelId} confirmedMode=${item.confirmedPermissionMode} alive=${item.alive} restored=${item.restored} agent=${item.agentVersion ?? "?"} mcpHttp=${item.mcpHttp} permission=${item.waitingForPermission} tools=${item.waitingForTools} idle=${Math.round(item.idleMs / 1000)}s ignoredStdoutNoise=${item.ignoredStdoutNoiseLines}`,
 						`  omitted Pi tools: ${item.omittedTools.length ? item.omittedTools.map((tool) => `${tool.name} (${tool.reason})`).join("; ") : "none"}`,
 						...(verbose && item.stderrTail ? [`  stderr (redacted): ${item.stderrTail}`] : []),
 					]),

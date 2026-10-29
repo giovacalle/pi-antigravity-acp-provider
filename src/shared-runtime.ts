@@ -21,7 +21,8 @@ export function acquireSharedRuntime(connectionFactory?: AntigravityConnectionFa
 	if (shared?.version !== PACKAGE_VERSION) {
 		// A different package version never shares; an unreferenced old stack would otherwise leak.
 		if (shared && shared.refs === 0) void shared.runtime.close();
-		const runtime = new AntigravityRuntime(connectionFactory, loadConfig().permissions);
+		const config = loadConfig();
+		const runtime = new AntigravityRuntime(connectionFactory, config.permissions, undefined, { idleTtlMs: config.idleTtlMs });
 		shared = { runtime, provider: createAntigravityProvider(runtime).provider, refs: 0, version: PACKAGE_VERSION };
 		slots[KEY] = shared;
 	}

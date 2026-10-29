@@ -8,7 +8,10 @@ export type RuntimeUpdateMode = "automatic" | "notify" | "manual";
 export interface AntigravityAcpConfig {
 	permissions: PermissionMode;
 	runtimeUpdates: RuntimeUpdateMode;
+	idleTtlMs: number;
 }
+
+export const DEFAULT_IDLE_TTL_MS = 600_000;
 
 export function resolvePiAgentDir(): string {
 	const custom = process.env.PI_CODING_AGENT_DIR?.trim();
@@ -47,15 +50,17 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 		const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as {
 			permissions?: unknown;
 			runtimeUpdates?: unknown;
+			idleTtlMs?: unknown;
 		};
 		return {
 			permissions: isPermissionMode(parsed.permissions) ? parsed.permissions : "yolo",
 			runtimeUpdates: isRuntimeUpdateMode(parsed.runtimeUpdates) ? parsed.runtimeUpdates : "automatic",
+			idleTtlMs: isTimerDelay(parsed.idleTtlMs) ? parsed.idleTtlMs : DEFAULT_IDLE_TTL_MS,
 		};
 	} catch {
 		// Missing or malformed configuration uses the documented defaults.
 	}
-	return { permissions: "yolo", runtimeUpdates: "automatic" };
+	return { permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: DEFAULT_IDLE_TTL_MS };
 }
 
 export function savePermissionMode(mode: PermissionMode, file = resolveConfigPath()): void {
@@ -106,6 +111,11 @@ export function isPermissionMode(value: unknown): value is PermissionMode {
 
 export function isRuntimeUpdateMode(value: unknown): value is RuntimeUpdateMode {
 	return value === "automatic" || value === "notify" || value === "manual";
+}
+
+// Node timers overflow above 2^31 - 1 ms.
+function isTimerDelay(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 2_147_483_647;
 }
 
 export function permissionModeLabel(mode: PermissionMode): string {
