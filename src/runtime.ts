@@ -45,6 +45,7 @@ import { credentialIdentity, hasSavedGoogleLogin, isGoogleLoginMarker } from "./
 import { ensureAntigravityAcpReady } from "./acp/setup.js";
 import { HeadlessOAuthRelay, shouldUseHeadlessOAuth } from "./acp/headless-oauth.js";
 import {
+	MCP_MAX_OUTPUT_BYTES,
 	PiMcpBridge,
 	piToolFingerprint,
 	planToolProjection,
@@ -957,7 +958,7 @@ export class AntigravityRuntime {
 			const saved = piSessionId ? this.sessionStore?.get(piSessionId) : undefined;
 			let session: AcpNewSessionResponse | undefined;
 			let restored = false;
-			const meta = sessionMeta(this.nativeTools);
+			const meta = sessionMeta(this.nativeTools, mcpServer?.name);
 			// Antigravity persists the builtin filter per session and keeps it on resume, so a session
 			// saved under another filter is replaced rather than restored.
 			if (saved?.cwd === cwd && saved.credentialId === credentialId && saved.nativeTools === nativeToolsKey(this.nativeTools)) {
@@ -1347,9 +1348,13 @@ function adaptPromptToCapabilities(parts: PromptParts, initialize: InitializeRes
 	return { ...parts, prompt: output };
 }
 
-function sessionMeta(nativeTools: NativeTools): Record<string, unknown> | undefined {
-	if (nativeTools === "all") return undefined;
-	return { antigravity: { enabledTools: nativeTools === "none" ? [] : nativeTools } };
+// Antigravity keeps neither eager servers nor the output limit across resume, so both go on every setup.
+function sessionMeta(nativeTools: NativeTools, eagerServer: string | undefined): Record<string, unknown> | undefined {
+	const antigravity = {
+		...(nativeTools === "all" ? {} : { enabledTools: nativeTools === "none" ? [] : nativeTools }),
+		...(eagerServer ? { eagerMcpServers: [eagerServer], mcpMaxOutputBytes: MCP_MAX_OUTPUT_BYTES } : {}),
+	};
+	return Object.keys(antigravity).length > 0 ? { antigravity } : undefined;
 }
 
 // Saved sessions record the filter they were created under; undefined means every builtin.
