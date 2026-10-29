@@ -1,4 +1,5 @@
 import { normalizeContext, type Context, type Model } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -132,6 +133,22 @@ describe("session lifecycle", () => {
 		expect(events.at(-1)).toMatchObject({ type: "error", reason: "aborted" });
 		await connections[0]!.process.exited;
 		expect((await runtime.snapshot()).bindings).toBe(0);
+	});
+
+	it("keeps neither a binding nor a saved record for one-off requests", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const { runtime, connections } = setup(undefined, "yolo", store);
+		const ids = [randomUUID(), randomUUID(), randomUUID()];
+		for (const sessionId of ids) {
+			const message = await drain(runtime.stream(model, { messages: [user("summarize")] }, { sessionId, cacheRetention: "none", apiKey: "test-key" }));
+			expect(message.stopReason).toBe("stop");
+		}
+
+		expect((await runtime.snapshot()).bindings).toBe(0);
+		for (const id of ids) expect(store.get(id)).toBeUndefined();
+		await Promise.all(connections.map((connection) => connection.process.exited));
+		expect(connections).toHaveLength(3);
 	});
 });
 
