@@ -16,6 +16,9 @@ import { PACKAGE_VERSION, PERMISSION_TOOL_NAME } from "../constants.js";
 import { projectToolSchema } from "./schema.js";
 
 const BODY_LIMIT = 1024 * 1024;
+// Antigravity spills results above this limit to a file the model may be unable to read,
+// and inlines at most 48 KiB of any result anyway.
+export const MCP_MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_TOOLS = 64;
 
 interface BridgeTool {
