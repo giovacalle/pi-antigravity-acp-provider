@@ -21,8 +21,8 @@ export function usageFromPrompt(response: PromptResponse): Usage {
 	usage.cacheWrite = token(standard?.cachedWriteTokens) ?? 0;
 	const input = token(tokens?.input_tokens) ?? token(standard?.inputTokens) ?? 0;
 	usage.input = Math.max(0, input - usage.cacheRead);
-	usage.output = token(tokens?.output_tokens) ?? token(standard?.outputTokens) ?? 0;
 	const reasoning = token(standard?.thoughtTokens);
+	usage.output = (token(tokens?.output_tokens) ?? token(standard?.outputTokens) ?? 0) + (reasoning ?? 0);
 	if (reasoning !== undefined) usage.reasoning = reasoning;
 	usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 	return usage;
