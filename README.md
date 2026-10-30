@@ -71,7 +71,7 @@ Antigravity owns OAuth tokens under `~/.gemini/antigravity-acp/`; Pi stores only
 
 ### Model availability
 
-The model catalog comes from the official ACP server. Pi persists the discovered catalog, and starts, print mode, subagents and `/model` reuse it for 24 hours without launching agy; a stale or missing catalog is discovered again, and a failed discovery keeps the stored one. ACP 1.4.x exposes model and thinking level as separate selectors; the provider combines them for discovery and confirms both when applying Pi's reasoning choice. If a model change only partially succeeds, the affected session is discarded before retrying, rather than reusing a stale model selection. The offline catalog keeps Gemini 3.8 Flash first; listing Argon does not establish account eligibility. A successful model listing or selection is not an inference/access probe: newly listed models can still fail because of plan eligibility, staged rollout, or backend availability. As of October 13, 2026, Google's [Argon announcement](https://www.antigravity.google/blog/gemini-4-argon-in-google-antigravity) and [model availability table](https://www.antigravity.google/docs/models/) list Gemini 4 Argon for Google AI Ultra and eligible Enterprise subscriptions, not AI Pro. If it returns `Requested entity was not found`, check access in the official Antigravity app/CLI with the same account; do not guess alternate model IDs or assume the listing proves access. Use another advertised model while investigating.
+The model catalog comes from the official ACP server. Pi persists the discovered catalog, and starts, print mode, subagents and `/model` reuse it for 24 hours without launching agy; a stale or missing catalog is discovered again, and a failed discovery keeps the stored one. `/antigravity-acp models` forces a new discovery, for example after switching accounts. ACP 1.4.x exposes model and thinking level as separate selectors; the provider combines them for discovery and confirms both when applying Pi's reasoning choice. If a model change only partially succeeds, the affected session is discarded before retrying, rather than reusing a stale model selection. The offline catalog keeps Gemini 3.8 Flash first; listing Argon does not establish account eligibility. A successful model listing or selection is not an inference/access probe: newly listed models can still fail because of plan eligibility, staged rollout, or backend availability. As of October 13, 2026, Google's [Argon announcement](https://www.antigravity.google/blog/gemini-4-argon-in-google-antigravity) and [model availability table](https://www.antigravity.google/docs/models/) list Gemini 4 Argon for Google AI Ultra and eligible Enterprise subscriptions, not AI Pro. If it returns `Requested entity was not found`, check access in the official Antigravity app/CLI with the same account; do not guess alternate model IDs or assume the listing proves access. Use another advertised model while investigating.
 
 ### macOS credential storage
 
@@ -85,6 +85,7 @@ On macOS the Antigravity server keeps the consumer token in the login keychain (
 /antigravity-acp doctor --verbose
 /antigravity-acp status
 /antigravity-acp quota
+/antigravity-acp models
 /antigravity-acp update
 /antigravity-acp updates [automatic|notify|manual]
 /antigravity-acp qualify

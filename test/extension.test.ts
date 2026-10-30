@@ -198,6 +198,21 @@ describe("extension entry point", () => {
 		expect(text).not.toContain("not supplied");
 	});
 
+	it("forces a model catalog refresh for this provider", async () => {
+		const { pi, ctx } = await load("parent");
+		const refresh = vi.fn(async () => ({ aborted: false, errors: new Map() }));
+		await pi.commands.get("antigravity-acp")!.handler("models", { ...ctx, modelRegistry: { refresh } } as never);
+		expect(refresh).toHaveBeenCalledWith({ providers: ["antigravity-acp"], allowNetwork: true, force: true });
+		expect(ctx.ui.notify.mock.calls.at(-1)).toEqual([expect.stringMatching(/^Antigravity models: gemini-3\.8-flash, /u), "info"]);
+	});
+
+	it("reports a failed model catalog refresh", async () => {
+		const { pi, ctx } = await load("parent");
+		const refresh = vi.fn(async () => ({ aborted: false, errors: new Map([["antigravity-acp", new Error("offline")]]) }));
+		await pi.commands.get("antigravity-acp")!.handler("models", { ...ctx, modelRegistry: { refresh } } as never);
+		expect(ctx.ui.notify.mock.calls.at(-1)).toEqual(["Antigravity model refresh failed: offline", "warning"]);
+	});
+
 	it("shows why the live quota is unavailable", async () => {
 		const { pi, ctx } = await load("parent", "usage-unavailable");
 		await pi.commands.get("antigravity-acp")!.handler("quota", ctx as never);

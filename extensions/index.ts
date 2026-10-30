@@ -154,6 +154,17 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 				ctx.ui.notify([quota, formatMetrics((await runtime.snapshot()).metrics)].join("\n"), "info");
 				return;
 			}
+			if (command === "models") {
+				const result = await ctx.modelRegistry.refresh({ providers: [provider.id], allowNetwork: true, force: true });
+				const error = result.errors.get(provider.id);
+				ctx.ui.notify(
+					error
+						? `Antigravity model refresh failed: ${errorMessage(error)}`
+						: `Antigravity models: ${provider.getModels().map((model) => model.id).join(", ")}`,
+					error ? "warning" : "info",
+				);
+				return;
+			}
 			if (command === "qualify") {
 				await runSetupWizard(ctx.ui, runtime);
 				return;
@@ -191,7 +202,7 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 			const verbose = command === "doctor --verbose";
 			if (command !== "doctor" && command !== "status" && !verbose) {
 				ctx.ui.notify(
-					"Usage: /antigravity-acp [setup|doctor|status|quota|update|updates|logout|account|qualify|permissions]",
+					"Usage: /antigravity-acp [setup|doctor|status|quota|models|update|updates|logout|account|qualify|permissions]",
 					"warning",
 				);
 				return;
