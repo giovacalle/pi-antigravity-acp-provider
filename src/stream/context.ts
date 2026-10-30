@@ -15,6 +15,12 @@ const CONTINUATION_LABEL =
 const WARM_CONTINUATION =
 	"Continue the current Pi user request already given in this session. Incorporate the latest tool results without repeating completed tool actions.";
 const LINE_BREAKS = /[\r\n\v\f\u0085\u2028\u2029]+/gu;
+/** agy runs `/plan`, `/usage` and `/logout` typed at the start of a text block or after whitespace; U+200B before the slash stops it, and agy drops it before the model sees the text. */
+const SLASH_COMMAND = /(^|\s)\/(?=[A-Za-z][\w-]*(?:\s|$))/gu;
+
+export function neutralizeSlashCommands(text: string): string {
+	return text.replace(SLASH_COMMAND, "$1\u200B/");
+}
 
 /** Instructions are never silently truncated or counted as consumed by a tool continuation. */
 export function currentSystemInstructions(context: Context): string {
@@ -82,10 +88,10 @@ export function buildPromptParts(
 	// truncatable history. This also preserves its image blocks on handoff.
 	if (hasTrailingResults) prompt.push({ type: "text", text: CONTINUATION_LABEL });
 	if (typeof latest.content === "string") {
-		if (latest.content.length > 0) prompt.push({ type: "text", text: latest.content });
+		if (latest.content.length > 0) prompt.push({ type: "text", text: neutralizeSlashCommands(latest.content) });
 	} else {
 		for (const block of latest.content) {
-			if (block.type === "text") prompt.push({ type: "text", text: block.text });
+			if (block.type === "text") prompt.push({ type: "text", text: neutralizeSlashCommands(block.text) });
 			else prompt.push({ type: "image", data: block.data, mimeType: block.mimeType });
 		}
 	}

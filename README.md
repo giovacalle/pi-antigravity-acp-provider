@@ -129,6 +129,8 @@ System instructions are kept outside truncated conversation history. Instruction
 
 When Antigravity reports that the account's quota is exhausted, the turn ends with `stopReason: "error"` and `Antigravity quota exceeded for <model>. Resets at <ISO 8601 time>.` (the reset part is omitted when Antigravity gives none). Pi does not retry quota errors automatically. The failed turn is not saved, and the ACP session stays warm for the next prompt.
 
+A user message such as `/plan`, `/usage` or `/logout` reaches the model as text: the provider puts an invisible U+200B before such slash commands so the Antigravity server does not run them.
+
 ## Security boundary
 
 This launches a full coding agent with the user's OS privileges. **The default `yolo` mode permits Antigravity-native commands and edits without confirmation.** Use `/antigravity-acp permissions default` for confirmation prompts. Disabling ACP filesystem/terminal **client callbacks is not a sandbox** for Antigravity-native tools. Pi hooks govern tools routed through the `pi_` MCP namespace; Antigravity-native tools remain governed by Antigravity policy and ACP permission requests. With `"nativeTools": "none"` the model has no Antigravity builtins, so its file, shell and web actions go through `pi_` tools and Pi hooks. New/restored sessions must advertise and confirm the requested permission mode. Unsupported or failed mode changes close affected sessions; an executing turn is stopped before changing its policy. Unexpected mode-change notifications also invalidate the session. Doctor/status distinguishes requested policy from each live binding's confirmed mode. This protocol enforcement is not a sandbox.

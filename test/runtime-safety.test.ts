@@ -251,6 +251,21 @@ describe("quota exhaustion", () => {
 	});
 });
 
+describe("slash commands", () => {
+	it.each(["/usage", "/logout", "hi\n/plan x"])("never lets agy intercept the user message %j", async (content) => {
+		const { runtime, entries } = setup();
+		const message = await turn(runtime, [user(content)]);
+		expect(message.stopReason).toBe("stop");
+		expect(message.content.filter((block) => block.type === "text")).toEqual([{ type: "text", text: "Hello" }]);
+		const [prompt] = entries().filter((entry) => entry.method === "session/prompt");
+		const texts = (prompt!.prompt as { type: string; text?: string }[]).flatMap((block) => block.type === "text" ? [block.text!] : []);
+		const joined = texts.join("").trim();
+		expect(joined).not.toBe("/logout");
+		expect(joined).not.toMatch(/^\/usage(?:\s|$)/iu);
+		for (const text of texts) expect(text).not.toMatch(/(?:\s|^)\/plan(?:\s|$)/u);
+	});
+});
+
 describe("session lifecycle", () => {
 	it("closes only the ending session and keeps its saved record", async () => {
 		const fixture = setup();
