@@ -186,6 +186,15 @@ for await (const line of rl) {
 		send({ jsonrpc: "2.0", id, result: {} });
 	} else if (method === "session/prompt") {
 		const text = params.prompt.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+		// agy runs these slash commands itself instead of prompting the model.
+		const joined = params.prompt.filter((block) => block.type === "text").map((block) => block.text).join("").trim();
+		const slash = joined === "/logout" ? "logout" : /^\/usage(?:\s|$)/iu.test(joined) ? "usage"
+			: params.prompt.some((block) => block.type === "text" && /(?:\s|^)\/plan(?:\s|$)/u.test(block.text)) ? "plan" : undefined;
+		if (slash) {
+			send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Intercepted /${slash}` } } } });
+			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+			continue;
+		}
 		// Handoffs carry the original request explicitly, but tell the agent not
 		// to repeat completed actions. Model that instruction rather than treating
 		// scenario keywords in the replayed request as a fresh tool invocation.
