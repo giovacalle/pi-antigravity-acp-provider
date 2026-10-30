@@ -7,7 +7,8 @@ export type AntigravityAcpErrorCode =
 	| "spawn"
 	| "timeout"
 	| "process_exit"
-	| "invalid_input";
+	| "invalid_input"
+	| "session_lost";
 
 export class AntigravityAcpError extends Error {
 	constructor(
