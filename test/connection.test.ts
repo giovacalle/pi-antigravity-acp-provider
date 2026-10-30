@@ -325,6 +325,114 @@ describe("AntigravityAcpConnection", () => {
 	});
 });
 
+describe("session-scoped faults", () => {
+	const open = (options: Partial<ConstructorParameters<typeof AntigravityAcpConnection>[0]> = {}) => {
+		const chunks = new Map<string, string[]>();
+		const connection = new AntigravityAcpConnection({ cwd: process.cwd(), command: process.execPath, args: [fakeAgent], handlers: {
+			onUpdate: ({ sessionId, update }) => {
+				if (update.sessionUpdate !== "agent_message_chunk" || update.content.type !== "text") return;
+				chunks.set(sessionId, [...(chunks.get(sessionId) ?? []), update.content.text]);
+			},
+		}, ...options });
+		const prompt = (sessionId: string, text: string, signal?: AbortSignal) =>
+			connection.prompt({ sessionId, prompt: [{ type: "text", text }] }, signal);
+		return { connection, chunks, prompt };
+	};
+	const counted = (marker: string, n: number) => Array.from({ length: n }, (_, i) => `${marker}${i + 1};`);
+
+	it("abandons only the session whose abort is never acknowledged", async () => {
+		const { connection, chunks, prompt } = open({ sessionScopedFaults: true });
+		try {
+			const a = (await connection.newSession(process.cwd())).sessionId;
+			const b = (await connection.newSession(process.cwd())).sessionId;
+			const controller = new AbortController();
+			const started = Date.now();
+			const stuck = prompt(a, "ignore cancel", controller.signal).catch((error: unknown) => error);
+			const counting = prompt(b, "count 60 beta");
+			controller.abort();
+			expect(await stuck).toMatchObject({ code: "aborted" });
+			expect(Date.now() - started).toBeLessThan(2_500);
+			expect(connection.process.alive).toBe(true);
+			expect((await counting).stopReason).toBe("end_turn");
+			expect(chunks.get(b)).toEqual(counted("beta", 60));
+			expect(connection.process.alive).toBe(true);
+			expect(connection.isSessionLost(a)).toBe(true);
+			await expect(prompt(a, "hello")).rejects.toMatchObject({ code: "session_lost" });
+			await expect(connection.resumeSession(a, process.cwd())).rejects.toMatchObject({ code: "session_lost" });
+			await expect(connection.loadSession(a, process.cwd())).rejects.toMatchObject({ code: "session_lost" });
+			expect((await prompt(b, "hello")).stopReason).toBe("end_turn");
+		} finally {
+			await connection.close();
+		}
+	});
+
+	it("abandons only the session whose watchdog expires", async () => {
+		const { connection, chunks, prompt } = open({ sessionScopedFaults: true, promptIdleTimeoutMs: 300 });
+		try {
+			const a = (await connection.newSession(process.cwd())).sessionId;
+			const b = (await connection.newSession(process.cwd())).sessionId;
+			const stuck = expect(prompt(a, "ignore cancel")).rejects.toThrow("no progress for 300ms");
+			const counting = prompt(b, "count 20 beta");
+			await stuck;
+			expect((await counting).stopReason).toBe("end_turn");
+			expect(chunks.get(b)).toEqual(counted("beta", 20));
+			expect(connection.process.alive).toBe(true);
+			await expect(prompt(a, "hello")).rejects.toMatchObject({ code: "session_lost" });
+		} finally {
+			await connection.close();
+		}
+	});
+
+	it("keeps the process alive when a session request times out or is aborted", async () => {
+		const connection = new AntigravityAcpConnection({ cwd: process.cwd(), command: process.execPath,
+			args: [fakeAgent, "session-timeout"], operationTimeoutMs: 100, sessionScopedFaults: true });
+		try {
+			await expect(connection.newSession(process.cwd())).rejects.toThrow("session/new timed out after 100ms");
+			const controller = new AbortController();
+			const aborted = connection.newSession(process.cwd(), controller.signal).catch((error: unknown) => error);
+			controller.abort();
+			expect(await aborted).toMatchObject({ code: "aborted" });
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			expect(connection.process.alive).toBe(true);
+		} finally {
+			await connection.close();
+		}
+	});
+
+	it("closes the process when it stops answering after a session fault", async () => {
+		const { connection, prompt } = open({ sessionScopedFaults: true, livenessTimeoutMs: 300 });
+		try {
+			const a = (await connection.newSession(process.cwd())).sessionId;
+			const b = (await connection.newSession(process.cwd())).sessionId;
+			const pending = expect(prompt(b, "hang")).rejects.toThrow(/closed|exited/);
+			const controller = new AbortController();
+			const frozen = prompt(a, "freeze process", controller.signal).catch((error: unknown) => error);
+			controller.abort();
+			expect(await frozen).toMatchObject({ code: "aborted" });
+			await pending;
+			await connection.process.exited;
+			expect(connection.process.alive).toBe(false);
+		} finally {
+			await connection.close();
+		}
+	});
+
+	it("closes the process on an unacknowledged abort when the option is off", async () => {
+		const { connection, prompt } = open();
+		try {
+			const a = (await connection.newSession(process.cwd())).sessionId;
+			const controller = new AbortController();
+			const stuck = prompt(a, "ignore cancel", controller.signal).catch((error: unknown) => error);
+			controller.abort();
+			expect(await stuck).toMatchObject({ code: "aborted" });
+			await connection.process.exited;
+			expect(connection.process.alive).toBe(false);
+		} finally {
+			await connection.close();
+		}
+	});
+});
+
 describe("agy system skills", () => {
 	const skill = path.join("skills", "system", "run-workflow", "SKILL.md");
 	const withAgent = async (
