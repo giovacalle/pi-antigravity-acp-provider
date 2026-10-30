@@ -28,6 +28,7 @@ import {
 import { rememberSystemSkillTree, removeSystemSkillTree } from "./system-skills.js";
 
 const DEFAULT_OPERATION_TIMEOUT_MS = 120_000;
+const DEFAULT_LIVENESS_TIMEOUT_MS = 5_000;
 
 export interface AntigravityConnectionHandlers {
 	onUpdate?: (notification: SessionNotification) => void | Promise<void>;
@@ -43,6 +44,11 @@ export interface AntigravityConnectionOptions extends AntigravityProcessOptions 
 	/** No inbound progress while a tool/permission is outstanding (default 60 minutes). */
 	promptWorkIdleTimeoutMs?: number;
 	maxFrameBytes?: number;
+	/** Contain per-session faults (unacknowledged abort, prompt watchdog, session request
+	 * timeout or abort) to that session instead of closing the process, which other
+	 * sessions may share. A process that then fails a liveness check is still closed. */
+	sessionScopedFaults?: boolean;
+	livenessTimeoutMs?: number;
 }
 
 export class AntigravityAcpConnection {
@@ -57,11 +63,18 @@ export class AntigravityAcpConnection {
 	private readonly processFailure: Promise<never>;
 	private readonly sessions = new Map<string, SessionState>();
 	private readonly sessionCwds = new Map<string, string>();
+	private readonly sessionScopedFaults: boolean;
+	private readonly livenessTimeoutMs: number;
+	private readonly lostSessions = new Set<string>();
+	private readonly stalls = new Map<string, (error: Error) => void>();
+	private livenessCheck: Promise<void> | undefined;
 	private handlers: AntigravityConnectionHandlers;
 	private closePromise?: Promise<void>;
 
 	constructor(options: AntigravityConnectionOptions) {
 		this.handlers = options.handlers ?? {};
+		this.sessionScopedFaults = options.sessionScopedFaults ?? false;
+		this.livenessTimeoutMs = options.livenessTimeoutMs ?? DEFAULT_LIVENESS_TIMEOUT_MS;
 		this.operationTimeoutMs = options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
 		this.promptIdleTimeoutMs = options.promptIdleTimeoutMs ?? 10 * 60_000;
 		this.promptWorkIdleTimeoutMs = options.promptWorkIdleTimeoutMs ?? 60 * 60_000;
@@ -145,7 +158,7 @@ export class AntigravityAcpConnection {
 	}
 
 	async initialize(signal?: AbortSignal): Promise<InitializeResponse> {
-		const response = await this.withAbort(this.initialized, signal);
+		const response = await this.withAbort(this.initialized, signal, true);
 		if (response.protocolVersion !== PROTOCOL_VERSION) {
 			await this.close();
 			throw new AntigravityAcpError(
@@ -165,6 +178,7 @@ export class AntigravityAcpConnection {
 		await this.withAbort(
 			this.withDeadline(this.connection.authenticate(request), timeoutMs, "authenticate"),
 			signal,
+			true,
 		);
 	}
 
@@ -199,6 +213,7 @@ export class AntigravityAcpConnection {
 		signal?: AbortSignal,
 		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
+		this.assertSessionUsable(sessionId);
 		await this.initialize();
 		const response = await this.withSystemSkillCleanup(cwd, () => this.withAbort(
 			this.withDeadline(
@@ -219,6 +234,7 @@ export class AntigravityAcpConnection {
 		signal?: AbortSignal,
 		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
+		this.assertSessionUsable(sessionId);
 		await this.initialize();
 		const response = await this.withSystemSkillCleanup(cwd, () => this.withAbort(
 			this.withDeadline(
@@ -290,8 +306,26 @@ export class AntigravityAcpConnection {
 		return this.watchdogs.get(sessionId)?.hold() ?? (() => undefined);
 	}
 
+	isSessionLost(sessionId: string): boolean {
+		return this.lostSessions.has(sessionId);
+	}
+
+	/** Give up on a session whose turn may still run inside agy: fail its in-flight
+	 * prompt, refuse any later prompt or restore of it on this process, and close the
+	 * process only if it no longer answers. */
+	abandonSession(
+		sessionId: string,
+		error: Error = new AntigravityAcpError("session_lost", "Antigravity ACP session was abandoned after a fault"),
+	): void {
+		this.lostSessions.add(sessionId);
+		this.stalls.get(sessionId)?.(error);
+		void this.cancel(sessionId).catch(() => undefined);
+		this.checkLiveness();
+	}
+
 	async prompt(request: PromptRequest, signal?: AbortSignal): Promise<PromptResponse> {
 		if (signal?.aborted) throw abortError();
+		this.assertSessionUsable(request.sessionId);
 		const cwd = this.sessionCwds.get(request.sessionId);
 		const pending = this.withProgressWatchdog(request).finally(() => {
 			if (cwd) removeSystemSkillTree(cwd);
@@ -314,6 +348,11 @@ export class AntigravityAcpConnection {
 				aborting = true;
 				void this.cancel(request.sessionId).catch(() => undefined);
 				cancelTimer = setTimeout(() => {
+					if (this.sessionScopedFaults) {
+						this.abandonSession(request.sessionId);
+						finish(() => reject(abortError()));
+						return;
+					}
 					void this.close().finally(() => finish(() => reject(abortError())));
 				}, 1_500);
 			};
@@ -338,6 +377,32 @@ export class AntigravityAcpConnection {
 			for (const cwd of new Set(this.sessionCwds.values())) removeSystemSkillTree(cwd);
 		});
 		await this.closePromise;
+	}
+
+	private assertSessionUsable(sessionId: string): void {
+		if (this.lostSessions.has(sessionId)) {
+			throw new AntigravityAcpError("session_lost", "Antigravity ACP session was abandoned after a fault; start a new session");
+		}
+	}
+
+	/** Single-flight. agy answers `session/cancel` sent as a request with a
+	 * method-not-found error at once; any response proves the process still serves. */
+	private checkLiveness(): void {
+		if (this.livenessCheck || this.closePromise) return;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		this.livenessCheck = Promise.race([
+			this.connection.request("session/cancel", { sessionId: "liveness" }).then(() => undefined, () => undefined),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(() => {
+					void this.close().catch(() => undefined);
+					resolve();
+				}, this.livenessTimeoutMs);
+				timer.unref?.();
+			}),
+		]).finally(() => {
+			clearTimeout(timer);
+			this.livenessCheck = undefined;
+		});
 	}
 
 	private async withSystemSkillCleanup<T>(cwd: string, setup: () => Promise<T>): Promise<T> {
@@ -388,18 +453,19 @@ export class AntigravityAcpConnection {
 		return findSessionSelector(state, category)?.currentValue === value;
 	}
 
-	private async withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+	private async withAbort<T>(promise: Promise<T>, signal?: AbortSignal, processLevel = false): Promise<T> {
 		// The operation has already started. Observe it before any cancellation
 		// branch closes the transport, even when we will not await its result.
 		void promise.catch(() => undefined);
 		if (!signal) return promise;
+		const closes = processLevel || !this.sessionScopedFaults;
 		if (signal.aborted) {
-			await this.close();
+			if (closes) await this.close();
 			throw abortError();
 		}
 		return new Promise<T>((resolve, reject) => {
 			const abort = () => {
-				void this.close();
+				if (closes) void this.close();
 				reject(abortError());
 			};
 			signal.addEventListener("abort", abort, { once: true });
@@ -423,11 +489,17 @@ export class AntigravityAcpConnection {
 		let rejectStall!: (error: Error) => void;
 		const stalled = new Promise<never>((_resolve, reject) => { rejectStall = reject; });
 		const watchdog = new PromptWatchdog(this.promptIdleTimeoutMs, this.promptWorkIdleTimeoutMs, (busy, ms) => {
-			rejectStall(new AntigravityAcpError("timeout",
-				`Antigravity ACP session/prompt timed out: no ${busy ? "tool/permission " : ""}progress for ${ms}ms`));
+			const error = new AntigravityAcpError("timeout",
+				`Antigravity ACP session/prompt timed out: no ${busy ? "tool/permission " : ""}progress for ${ms}ms`);
+			if (this.sessionScopedFaults) {
+				this.abandonSession(request.sessionId, error);
+				return;
+			}
+			rejectStall(error);
 			void this.close().catch(() => undefined);
 		});
 		this.watchdogs.set(request.sessionId, watchdog);
+		this.stalls.set(request.sessionId, rejectStall);
 		watchdog.arm();
 		try {
 			return await Promise.race([
@@ -437,6 +509,7 @@ export class AntigravityAcpConnection {
 		} finally {
 			watchdog.dispose();
 			this.watchdogs.delete(request.sessionId);
+			this.stalls.delete(request.sessionId);
 		}
 	}
 
@@ -451,7 +524,8 @@ export class AntigravityAcpConnection {
 				this.processFailure,
 				new Promise<never>((_resolve, reject) => {
 					timer = setTimeout(() => {
-						void this.close();
+						if (this.sessionScopedFaults && phase !== "initialize" && phase !== "authenticate") this.checkLiveness();
+						else void this.close();
 						reject(new AntigravityAcpError("timeout", `Antigravity ACP ${phase} timed out after ${timeoutMs}ms`));
 					}, timeoutMs);
 					timer.unref?.();
