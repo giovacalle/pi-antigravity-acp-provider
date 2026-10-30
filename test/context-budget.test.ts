@@ -185,11 +185,13 @@ describe("slash command neutralization", () => {
 		["/USAGE", `${ZWSP}/USAGE`],
 		["please\n/plan this", `please\n${ZWSP}/plan this`],
 		["/plan /usage", `${ZWSP}/plan ${ZWSP}/usage`],
+		["hi\u0085/plan x", `hi\u0085${ZWSP}/plan x`],
+		["hi\u001f/plan", `hi\u001f${ZWSP}/plan`],
 	])("marks the bare slash command in %j", (input, expected) => {
 		expect(neutralizeSlashCommands(input)).toBe(expected);
 	});
 
-	it.each(["/Users/me/a.ts", "see a /b/c", "https://x.y/z"])("leaves the path or URL %j untouched", (input) => {
+	it.each(["/Users/me/a.ts", "see a /b/c", "https://x.y/z", "ls /tmp", "run /plan-x", "try /usages"])("leaves the path or URL %j untouched", (input) => {
 		expect(neutralizeSlashCommands(input)).toBe(input);
 	});
 
@@ -207,6 +209,13 @@ describe("slash command neutralization", () => {
 			{ type: "text", text: expect.stringContaining("# Current Pi user request") },
 			{ type: "text", text: `${ZWSP}/plan x` }, IMAGE,
 		]);
+	});
+
+	it("neutralizes a command split across text blocks", () => {
+		const context: Context = { messages: [{ role: "user", content: [{ type: "text", text: " " }, { type: "text", text: "/" }, { type: "text", text: "logout" }], timestamp: 1 }] };
+		const joined = texts(buildPromptParts(context, false, 0).prompt).join("");
+		expect(joined.trim()).not.toMatch(/^\//u);
+		expect(joined.replaceAll(ZWSP, "")).toBe(" /logout");
 	});
 
 	it("neutralizes an unseen request on a warm session", () => {
