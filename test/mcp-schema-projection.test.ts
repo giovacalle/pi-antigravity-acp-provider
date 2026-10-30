@@ -145,6 +145,23 @@ describe("MCP schema projection", () => {
 		expect(invoked).toBe(0);
 	});
 
+	it("rejects proxied, non-object and non-plain keyword maps without invoking them", () => {
+		let invoked = 0;
+		const trapped = () => new Proxy({}, { ownKeys() { invoked++; return []; } });
+		const accessor = {};
+		Object.defineProperty(accessor, "a", { enumerable: true, get() { invoked++; return {}; } });
+		class Custom { a = { type: "string" }; }
+		for (const wrap of [
+			(map: unknown) => ({ type: "object", $defs: map, properties: {} }),
+			(map: unknown) => property({ type: "object", patternProperties: map }),
+			(map: unknown) => ({ type: "object", properties: map }),
+		]) {
+			omitted(wrap(trapped()), "unsupported_keyword");
+			for (const map of ["x", null, [], new Custom(), accessor, { [Symbol("s")]: {} }]) omitted(wrap(map), "invalid_keyword_value");
+		}
+		expect(invoked).toBe(0);
+	});
+
 	it("does not invoke array iterators, getters or proxy traps", () => {
 		let invoked = 0;
 		const customIterator = ["x"];
