@@ -60,7 +60,8 @@ const IDLE_SWEEP_MAX_MS = 60_000;
 const QUOTA_CACHE_MS = 60_000;
 const QUOTA_TIMEOUT_MS = 30_000;
 // agy keeps every session's harness (~140 MB) until its process exits; measured on agy 1.4.3,
-// a process that has set up 6 sessions holds about 1.13 GB, so it is retired then.
+// a process that has set up 6 sessions holds about 1.13 GB, so it is retired then, whatever
+// maxSessionsPerProcess allows; a lower cap only limits how many of those 6 are live at once.
 const RECYCLE_AFTER_SESSIONS = 6;
 
 type AntigravityModel = Model<"antigravity-acp">;
@@ -206,11 +207,9 @@ export class AntigravityRuntime {
 	) {
 		this.nativeTools = limits.nativeTools ?? "all";
 		if (limits.sharedProcess) {
-			const maxSessionsPerProcess = limits.maxSessionsPerProcess ?? DEFAULT_MAX_SESSIONS_PER_PROCESS;
 			this.pool = new AcpConnectionPool({
-				maxSessionsPerProcess,
-				// Never drain below the live cap, so a full process can still replace its sessions.
-				recycleAfterSessions: Math.max(maxSessionsPerProcess, RECYCLE_AFTER_SESSIONS),
+				maxSessionsPerProcess: limits.maxSessionsPerProcess ?? DEFAULT_MAX_SESSIONS_PER_PROCESS,
+				recycleAfterSessions: RECYCLE_AFTER_SESSIONS,
 				idleTtlMs: limits.idleTtlMs ?? DEFAULT_IDLE_TTL_MS,
 			});
 		}

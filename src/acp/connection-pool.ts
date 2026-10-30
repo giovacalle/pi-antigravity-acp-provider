@@ -28,6 +28,8 @@ interface PoolEntry {
  * Shares one initialized ACP connection per pool key between up to `maxSessionsPerProcess` sessions.
  * agy frees a session's memory only when its process exits, so a process that has set up
  * `recycleAfterSessions` sessions drains: it takes no new leases and closes when its last one leaves.
+ * Setups are counted when they start, so leases acquired together may overshoot the threshold
+ * by up to `maxSessionsPerProcess - 1`.
  */
 export class AcpConnectionPool {
 	/** Updates and permission requests for a session no lease registered; they are dropped or
@@ -103,6 +105,10 @@ export class AcpConnectionPool {
 
 	private leave(entry: PoolEntry): void {
 		entry.leases -= 1;
+		this.closeIfEmpty(entry);
+	}
+
+	private closeIfEmpty(entry: PoolEntry): void {
 		const connection = entry.connection;
 		if (entry.leases > 0 || !connection || !this.entries.includes(entry)) return;
 		if (this.draining(connection) || this.idleTtlMs === 0) {
@@ -137,6 +143,8 @@ export class AcpConnectionPool {
 				},
 			});
 			void opened.connection.process.exited.then(remove, remove);
+			// Every waiter may have aborted while the process started.
+			this.closeIfEmpty(entry);
 			return opened;
 		}, (error: unknown) => {
 			remove();

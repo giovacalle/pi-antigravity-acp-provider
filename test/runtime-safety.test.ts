@@ -579,6 +579,14 @@ describe("shared process", () => {
 		expect(connections).toHaveLength(2);
 	});
 
+	it("recycles a shared process after six session setups even when more may share it", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { sharedProcess: true, maxSessionsPerProcess: 8, maxLiveSessions: 0 });
+
+		for (let i = 0; i < 7; i += 1) expect((await turn(runtime, [user("hello")], `S${i}`)).stopReason).toBe("stop");
+
+		expect(connections).toHaveLength(2);
+	});
+
 	it("closes every shared process once its sessions go idle", async () => {
 		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
 		try {

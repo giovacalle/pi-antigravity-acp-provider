@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SessionNotification } from "@agentclientprotocol/sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AntigravityAcpConnection } from "../src/acp/connection.js";
 import { AcpConnectionPool } from "../src/acp/connection-pool.js";
@@ -151,5 +151,30 @@ describe("AcpConnectionPool", () => {
 		await opened[0]!.process.exited;
 		await pool.acquire("managed", open);
 		expect(opened).toHaveLength(2);
+	});
+
+	it("counts resumed sessions toward the recycle threshold", async () => {
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 2, idleTtlMs: 60_000 });
+		const { open, opened } = opener();
+		const lease = await pool.acquire("managed", open);
+		const cwd = tmp();
+		const session = await lease.connection.newSession(cwd);
+		await lease.connection.resumeSession(session.sessionId, cwd);
+
+		await pool.acquire("managed", open);
+
+		expect(opened).toHaveLength(2);
+	});
+
+	it("closes a process after the idle TTL when its only waiter aborted during the open", async () => {
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 6, idleTtlMs: 200 });
+		const { open, opened } = opener();
+		const controller = new AbortController();
+		const aborted = pool.acquire("managed", open, controller.signal);
+		controller.abort();
+		await expect(aborted).rejects.toThrow("aborted");
+
+		await vi.waitFor(() => expect(opened).toHaveLength(1));
+		await opened[0]!.process.exited;
 	});
 });
