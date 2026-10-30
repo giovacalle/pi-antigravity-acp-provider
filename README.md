@@ -141,7 +141,7 @@ System instructions are kept outside truncated conversation history. Instruction
 
 When Antigravity reports that the account's quota is exhausted, the turn ends with `stopReason: "error"` and `Antigravity quota exceeded for <model>. Resets at <ISO 8601 time>.` (the reset part is omitted when Antigravity gives none). Pi does not retry quota errors automatically. The failed turn is not saved, and the ACP session stays warm for the next prompt.
 
-A user message such as `/plan`, `/usage` or `/logout` reaches the model as text: the provider puts an invisible U+200B before those three commands (and before any slash that starts the message) so the Antigravity server does not run them. Other slashes, such as paths, are left untouched.
+A user message such as `/plan`, `/usage` or `/logout` reaches the model as text: the provider puts an invisible U+200B before those three commands (and before any slash that starts the message) so the Antigravity server does not run them. Other slashes, such as paths, are left untouched. The marker is removed before the model sees the text.
 
 ## Security boundary
 
