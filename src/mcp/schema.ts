@@ -109,6 +109,13 @@ function plainEntries(value: object, budget: ProjectionBudget): Array<[string, u
 	return entries;
 }
 
+/** Own entries of an object-valued keyword; a proxy is never inspected. */
+function objectEntries(value: unknown, budget: ProjectionBudget): Array<[string, unknown]> | SchemaOmissionReason {
+	if (types.isProxy(value)) return "unsupported_keyword";
+	if (!value || typeof value !== "object" || Array.isArray(value)) return "invalid_keyword_value";
+	return plainEntries(value, budget) ?? "invalid_keyword_value";
+}
+
 /** Register the root's local definitions under every `$ref` form naming them:
  * JSON pointers, and TypeBox Cyclic's bare names that resolve through `$id`.
  * Reads own data descriptors only, so accessors and proxies are never invoked. */
@@ -118,11 +125,8 @@ function collectDefinitions(root: unknown, budget: ProjectionBudget): SchemaOmis
 		const descriptor = Object.getOwnPropertyDescriptor(root, keyword);
 		if (!descriptor) continue;
 		if (!("value" in descriptor)) return "unsupported_keyword";
-		const definitions: unknown = descriptor.value;
-		if (types.isProxy(definitions)) return "unsupported_keyword";
-		if (!definitions || typeof definitions !== "object" || Array.isArray(definitions)) return "invalid_keyword_value";
-		const entries = plainEntries(definitions, budget);
-		if (!entries) return "invalid_keyword_value";
+		const entries = objectEntries(descriptor.value, budget);
+		if (typeof entries === "string") return entries;
 		for (const [name, schema] of entries) {
 			if (/[~/%]/u.test(name)) continue;
 			budget.definitions.set(`#/${keyword}/${name}`, schema);
@@ -175,12 +179,8 @@ function sanitizeNode(value: object, depth: number, budget: ProjectionBudget): P
 		if (key === "patternProperties") {
 			// Only a catch-all pattern with no other property rules is an
 			// ordinary map, which additionalProperties expresses exactly.
-			if (types.isProxy(candidate)) return { reason: "unsupported_keyword" };
-			if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-				return { reason: "invalid_keyword_value" };
-			}
-			const patterns = plainEntries(candidate, budget);
-			if (!patterns) return { reason: "invalid_keyword_value" };
+			const patterns = objectEntries(candidate, budget);
+			if (typeof patterns === "string") return { reason: patterns };
 			if (patterns.length !== 1 || !ANY_NAME.has(patterns[0]![0]) ||
 				entries.some(([name]) => name === "additionalProperties" || name === "properties")) {
 				return { reason: "unsupported_keyword" };
@@ -201,12 +201,8 @@ function sanitizeNode(value: object, depth: number, budget: ProjectionBudget): P
 			continue;
 		}
 		if (key === "properties") {
-			if (types.isProxy(candidate)) return { reason: "unsupported_keyword" };
-			if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-				return { reason: "invalid_keyword_value" };
-			}
-			const propertyEntries = plainEntries(candidate, budget);
-			if (!propertyEntries) return { reason: "invalid_keyword_value" };
+			const propertyEntries = objectEntries(candidate, budget);
+			if (typeof propertyEntries === "string") return { reason: propertyEntries };
 			spend(budget, 0, key.length + 5);
 			const properties: Record<string, unknown> = {};
 			for (const [name, schema] of propertyEntries) {
