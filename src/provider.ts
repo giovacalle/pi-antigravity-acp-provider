@@ -13,6 +13,9 @@ import { hasSavedGoogleLogin, isGoogleLoginMarker, newGoogleLoginMarker } from "
 import { FALLBACK_MODELS, modelForAcpStream, projectModels, PROVIDER_ID, restoreModels } from "./models.js";
 import { AntigravityRuntime } from "./runtime.js";
 
+// A stored catalog younger than this is reused without launching agy.
+const CATALOG_FRESH_MS = 24 * 60 * 60_000;
+
 export interface AntigravityProviderBundle {
 	provider: Provider<"antigravity-acp">;
 	runtime: AntigravityRuntime;
@@ -99,18 +102,20 @@ export function createAntigravityProvider(runtime = new AntigravityRuntime()): A
 		},
 		getModels: () => models,
 		async refreshModels(context: RefreshModelsContext) {
-			if (!context.allowNetwork) {
-				// Restore the last discovered catalog before Pi resolves startup model
-				// patterns, so models outside the offline fallback stay selectable.
-				const restored = restoreModels(context.stored?.models ?? []);
-				if (restored.length === 0) return;
-				await context.publish({
+			// Publish the last discovered catalog first, so models outside the offline
+			// fallback stay selectable while startup model patterns resolve.
+			const restored = restoreModels(context.stored?.models ?? []);
+			if (restored.length > 0) {
+				const published = await context.publish({
 					update: () => {
 						models = restored;
 					},
 				});
-				return;
+				if (!published) return;
 			}
+			if (!context.allowNetwork || context.signal.aborted) return;
+			// A catalog discovered in the last day is reused without launching agy.
+			if (restored.length > 0 && !context.force && fresh(context.stored?.checkedAt)) return;
 			let discovered;
 			try {
 				const key =
@@ -122,7 +127,7 @@ export function createAntigravityProvider(runtime = new AntigravityRuntime()): A
 				if (!key) return;
 				discovered = projectModels(await runtime.discoverModels(key, context.signal));
 			} catch {
-				// Startup refresh must not hide the conservative offline catalog when
+				// Startup refresh must not hide the restored or offline catalog when
 				// authentication is absent, expired, or temporarily unavailable.
 				return;
 			}
@@ -149,6 +154,12 @@ function savedGoogleLogin(marker: string): string {
 		throw new AntigravityAcpError("auth", "No saved Google login for this Pi profile. Run /login antigravity-acp.");
 	}
 	return marker;
+}
+
+function fresh(checkedAt: number | undefined): boolean {
+	if (typeof checkedAt !== "number") return false;
+	const age = Date.now() - checkedAt;
+	return age >= 0 && age < CATALOG_FRESH_MS;
 }
 
 function stream(
