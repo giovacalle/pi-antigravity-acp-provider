@@ -249,7 +249,7 @@ export class AntigravityAcpConnection {
 	}
 
 	async setModel(sessionId: string, modelId: string, signal?: AbortSignal): Promise<void> {
-		await this.initialize(signal);
+		await this.initializeForSession(signal);
 		// Match the live selectors, not a fixed suffix list: future servers may
 		// advertise levels such as `off`. Exact native model IDs take precedence.
 		const state = this.getSessionState(sessionId);
@@ -283,7 +283,7 @@ export class AntigravityAcpConnection {
 	}
 
 	async setMode(sessionId: string, modeId: string, signal?: AbortSignal): Promise<void> {
-		await this.initialize(signal);
+		await this.initializeForSession(signal);
 		if (await this.setSelector(sessionId, "mode", modeId, signal)) return;
 		await this.withAbort(
 			this.withDeadline(
@@ -312,7 +312,8 @@ export class AntigravityAcpConnection {
 
 	/** Give up on a session whose turn may still run inside agy: fail its in-flight
 	 * prompt, refuse any later prompt or restore of it on this process, and close the
-	 * process only if it no longer answers. */
+	 * process only if it no longer answers. Restore it only on another process: agy
+	 * rejects a second turn while the abandoned one may still run. */
 	abandonSession(
 		sessionId: string,
 		error: Error = new AntigravityAcpError("session_lost", "Antigravity ACP session was abandoned after a fault"),
@@ -379,9 +380,16 @@ export class AntigravityAcpConnection {
 		await this.closePromise;
 	}
 
+	/** With scoped faults, a cancelled session call must not close a process that
+	 * other sessions may share, so it gives up before sending anything instead. */
+	private async initializeForSession(signal?: AbortSignal): Promise<void> {
+		await this.initialize(this.sessionScopedFaults ? undefined : signal);
+		if (signal?.aborted) throw abortError();
+	}
+
 	private assertSessionUsable(sessionId: string): void {
 		if (this.lostSessions.has(sessionId)) {
-			throw new AntigravityAcpError("session_lost", "Antigravity ACP session was abandoned after a fault; start a new session");
+			throw new AntigravityAcpError("session_lost", "Antigravity ACP session was abandoned after a fault; restore it on another process or start a new one");
 		}
 	}
 

@@ -341,7 +341,7 @@ describe("session-scoped faults", () => {
 	const counted = (marker: string, n: number) => Array.from({ length: n }, (_, i) => `${marker}${i + 1};`);
 
 	it("abandons only the session whose abort is never acknowledged", async () => {
-		const { connection, chunks, prompt } = open({ sessionScopedFaults: true });
+		const { connection, chunks, prompt } = open({ sessionScopedFaults: true, livenessTimeoutMs: 300 });
 		try {
 			const a = (await connection.newSession(process.cwd())).sessionId;
 			const b = (await connection.newSession(process.cwd())).sessionId;
@@ -355,6 +355,7 @@ describe("session-scoped faults", () => {
 			expect(connection.process.alive).toBe(true);
 			expect((await counting).stopReason).toBe("end_turn");
 			expect(chunks.get(b)).toEqual(counted("beta", 60));
+			await new Promise((resolve) => setTimeout(resolve, 500));
 			expect(connection.process.alive).toBe(true);
 			expect(connection.isSessionLost(a)).toBe(true);
 			await expect(prompt(a, "hello")).rejects.toMatchObject({ code: "session_lost" });
@@ -367,7 +368,7 @@ describe("session-scoped faults", () => {
 	});
 
 	it("abandons only the session whose watchdog expires", async () => {
-		const { connection, chunks, prompt } = open({ sessionScopedFaults: true, promptIdleTimeoutMs: 300 });
+		const { connection, chunks, prompt } = open({ sessionScopedFaults: true, promptIdleTimeoutMs: 300, livenessTimeoutMs: 300 });
 		try {
 			const a = (await connection.newSession(process.cwd())).sessionId;
 			const b = (await connection.newSession(process.cwd())).sessionId;
@@ -376,6 +377,7 @@ describe("session-scoped faults", () => {
 			await stuck;
 			expect((await counting).stopReason).toBe("end_turn");
 			expect(chunks.get(b)).toEqual(counted("beta", 20));
+			await new Promise((resolve) => setTimeout(resolve, 500));
 			expect(connection.process.alive).toBe(true);
 			await expect(prompt(a, "hello")).rejects.toMatchObject({ code: "session_lost" });
 		} finally {
@@ -385,14 +387,32 @@ describe("session-scoped faults", () => {
 
 	it("keeps the process alive when a session request times out or is aborted", async () => {
 		const connection = new AntigravityAcpConnection({ cwd: process.cwd(), command: process.execPath,
-			args: [fakeAgent, "session-timeout"], operationTimeoutMs: 100, sessionScopedFaults: true });
+			args: [fakeAgent, "session-timeout"], operationTimeoutMs: 100, sessionScopedFaults: true, livenessTimeoutMs: 300 });
 		try {
 			await expect(connection.newSession(process.cwd())).rejects.toThrow("session/new timed out after 100ms");
 			const controller = new AbortController();
 			const aborted = connection.newSession(process.cwd(), controller.signal).catch((error: unknown) => error);
 			controller.abort();
 			expect(await aborted).toMatchObject({ code: "aborted" });
-			await new Promise((resolve) => setTimeout(resolve, 200));
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			expect(connection.process.alive).toBe(true);
+		} finally {
+			await connection.close();
+		}
+	});
+
+	it("rejects an already-aborted selector change without closing the process", async () => {
+		const { connection, chunks, prompt } = open({ sessionScopedFaults: true, livenessTimeoutMs: 300 });
+		try {
+			const a = (await connection.newSession(process.cwd())).sessionId;
+			const b = (await connection.newSession(process.cwd())).sessionId;
+			const counting = prompt(b, "count 20 beta");
+			const aborted = AbortSignal.abort();
+			await expect(connection.setModel(a, "gemini-test", aborted)).rejects.toMatchObject({ code: "aborted" });
+			await expect(connection.setMode(a, "yolo", aborted)).rejects.toMatchObject({ code: "aborted" });
+			expect((await counting).stopReason).toBe("end_turn");
+			expect(chunks.get(b)).toEqual(counted("beta", 20));
+			expect(connection.getSessionState(a).models?.currentModelId).toBe("auto");
 			expect(connection.process.alive).toBe(true);
 		} finally {
 			await connection.close();
