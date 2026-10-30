@@ -240,6 +240,59 @@ describe("AntigravityAcpConnection", () => {
 		expect(() => new AntigravityAcpConnection({ cwd: process.cwd(), command: process.execPath, args: [fakeAgent], promptIdleTimeoutMs: Infinity })).toThrow(RangeError);
 	});
 
+	it("hosts concurrent sessions on one process", async () => {
+		const chunks: string[] = [];
+		const bySession = new Map<string, string[]>();
+		const connection = new AntigravityAcpConnection({ cwd: process.cwd(), command: process.execPath, args: [fakeAgent], handlers: {
+			onUpdate: ({ sessionId, update }) => {
+				if (update.sessionUpdate !== "agent_message_chunk" || update.content.type !== "text") return;
+				chunks.push(update.content.text);
+				bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), update.content.text]);
+			},
+		} });
+		const prompt = (sessionId: string, text: string) => connection.prompt({ sessionId, prompt: [{ type: "text", text }] });
+		const counted = (marker: string, n: number) => Array.from({ length: n }, (_, i) => `${marker}${i + 1};`);
+		try {
+			const a = (await connection.newSession(process.cwd())).sessionId;
+			const b = (await connection.newSession(process.cwd())).sessionId;
+			expect(a).not.toBe(b);
+
+			const both = await Promise.all([prompt(a, "count 6 alpha"), prompt(b, "count 6 beta")]);
+			expect(both.map((response) => response.stopReason)).toEqual(["end_turn", "end_turn"]);
+			expect(bySession.get(a)).toEqual(counted("alpha", 6));
+			expect(bySession.get(b)).toEqual(counted("beta", 6));
+			expect(chunks.indexOf("beta1;")).toBeLessThan(chunks.indexOf("alpha6;"));
+
+			bySession.clear();
+			const hung = prompt(a, "hang");
+			const counting = prompt(b, "count 6 beta");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			await connection.cancel(a);
+			expect((await hung).stopReason).toBe("cancelled");
+			expect((await counting).stopReason).toBe("end_turn");
+			expect(bySession.get(b)).toEqual(counted("beta", 6));
+			expect(bySession.has(a)).toBe(false);
+		} finally {
+			await connection.close();
+		}
+	});
+
+	it("fails every session when the shared process crashes", async () => {
+		const connection = new AntigravityAcpConnection({ cwd: process.cwd(), command: process.execPath, args: [fakeAgent] });
+		const prompt = (sessionId: string, text: string) => connection.prompt({ sessionId, prompt: [{ type: "text", text }] });
+		try {
+			const a = (await connection.newSession(process.cwd())).sessionId;
+			const b = (await connection.newSession(process.cwd())).sessionId;
+			const hung = expect(prompt(a, "hang")).rejects.toThrow(/closed|exited/);
+			await expect(prompt(b, "crash process")).rejects.toThrow(/closed|exited/);
+			await hung;
+			await connection.process.exited;
+			expect(connection.process.alive).toBe(false);
+		} finally {
+			await connection.close();
+		}
+	});
+
 	it("uses the official SDK against a real child process", async () => {
 		const updates: string[] = [];
 		const connection = new AntigravityAcpConnection({

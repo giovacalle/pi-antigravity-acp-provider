@@ -844,6 +844,6 @@ describe("throwaway conversations", () => {
 		const store = conversationsIn(root, "plain");
 		await runtime.quota(undefined);
 		await connections[0]!.process.exited;
-		expect(store.files()).toEqual([...userFiles, "fake-session.db", "fake-session.db-shm", "fake-session.db-wal", "fake-session.meta"].sort());
+		expect(store.files()).toEqual([...userFiles, "fake-session-1.db", "fake-session-1.db-shm", "fake-session-1.db-wal", "fake-session-1.meta"].sort());
 	});
 });
