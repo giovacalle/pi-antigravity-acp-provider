@@ -712,11 +712,6 @@ export class AntigravityRuntime {
 			this.assertEpoch(epoch);
 			// A queued caller may hold an obsolete binding after shutdown/mode changes.
 			binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
-			if (binding.instructionsInSetup && binding.instructionsFingerprint !== instructionFingerprint(instructions)) {
-				// agy keeps the history and replaces the appended instructions on resume.
-				await this.dropBinding(key, binding, false);
-				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
-			}
 			if (
 				binding.needsReconstruction || binding.mode !== this.permissionMode ||
 				this.confirmedMode(binding) !== this.permissionMode ||
@@ -726,6 +721,10 @@ export class AntigravityRuntime {
 					binding.historyFingerprint
 			) {
 				await this.dropBinding(key, binding, true);
+				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
+			} else if (binding.instructionsInSetup && binding.instructionsFingerprint !== instructionFingerprint(instructions)) {
+				// agy keeps the history and replaces the appended instructions on resume.
+				await this.dropBinding(key, binding, false);
 				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
 			}
 			binding.writer = writer;
