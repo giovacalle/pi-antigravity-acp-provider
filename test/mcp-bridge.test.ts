@@ -48,4 +48,37 @@ describe("PiMcpBridge", () => {
 			await bridge.close();
 		}
 	});
+
+	it("names the failing property without echoing argument values", async () => {
+		const onCall = vi.fn();
+		const bridge = new PiMcpBridge({
+			tools: [{ name: "read", description: "Read a file", parameters: Type.Object({ path: Type.String() }) }],
+			onCall,
+		});
+		const descriptor = await bridge.start();
+		if (!descriptor || !("url" in descriptor)) throw new Error("bridge did not start");
+		const headers = Object.fromEntries(descriptor.headers.map((header) => [header.name, header.value]));
+		const client = new Client({ name: "bridge-test", version: "1" }, { capabilities: {} });
+		const transport = new StreamableHTTPClientTransport(new URL(descriptor.url), {
+			requestInit: { headers },
+		});
+		const errorText = async (args: Record<string, unknown>) => {
+			const result = await client.callTool({ name: "pi_read", arguments: args });
+			expect(result.isError).toBe(true);
+			return (result.content as { text: string }[])[0]!.text;
+		};
+		try {
+			await client.connect(transport as Parameters<typeof client.connect>[0]);
+			const wrongType = await errorText({ path: 4242 });
+			expect(wrongType).toContain("/path");
+			expect(wrongType).not.toContain("4242");
+			const missing = await errorText({});
+			expect(missing).toContain("(root)");
+			expect(missing).toContain("path");
+			expect(onCall).not.toHaveBeenCalled();
+		} finally {
+			await client.close();
+			await bridge.close();
+		}
+	});
 });

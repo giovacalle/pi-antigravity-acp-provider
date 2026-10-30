@@ -143,7 +143,9 @@ export class PiMcpBridge {
 			const args = call.params.arguments ?? {};
 			try {
 				if (!Value.Check(tool.originalSchema, args)) {
-					return toolError("Arguments failed the original Pi tool schema");
+					return toolError(
+						`Arguments failed the original Pi tool schema: ${schemaErrors(tool.originalSchema, args)}`,
+					);
 				}
 			} catch {
 				return toolError("The original Pi tool schema could not validate these arguments");
@@ -213,6 +215,16 @@ function validBearerToken(header: string | undefined, token: string): boolean {
 	const actual = Buffer.from(header ?? "");
 	const expected = Buffer.from(`Bearer ${token}`);
 	return actual.byteLength === expected.byteLength && timingSafeEqual(actual, expected);
+}
+
+// Paths and schema messages only: argument values may hold secrets or huge content.
+function schemaErrors(schema: Tool["parameters"], value: unknown): string {
+	const details: string[] = [];
+	for (const error of Value.Errors(schema, value)) {
+		details.push(`${error.instancePath || "(root)"}: ${error.message}`);
+		if (details.length === 3) break;
+	}
+	return details.join("; ").slice(0, 300);
 }
 
 function toolError(text: string): CallToolResult {
