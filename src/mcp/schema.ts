@@ -21,9 +21,12 @@ type Projection = { schema: Record<string, unknown> } | { reason: SchemaOmission
  * silently widens its advertised input schema or prevents other tools loading. */
 export function projectToolSchema(value: unknown): Projection {
 	try {
-		const projected = sanitizeSchema(value, 0, {
-			work: MAX_SCHEMA_WORK, chars: SCHEMA_LIMIT, ancestors: new WeakSet(),
-		});
+		const budget: ProjectionBudget = {
+			work: MAX_SCHEMA_WORK, chars: SCHEMA_LIMIT, ancestors: new WeakSet(), definitions: new Map(),
+		};
+		const invalid = collectDefinitions(value, budget);
+		if (invalid) return { reason: invalid };
+		const projected = sanitizeSchema(value, 0, budget);
 		if ("reason" in projected) return projected;
 		if (projected.schema.type !== "object") return { reason: "not_object" };
 		if (Buffer.byteLength(JSON.stringify(projected.schema), "utf8") > SCHEMA_LIMIT) return { reason: "too_large" };
@@ -41,6 +44,7 @@ interface ProjectionBudget {
 	work: number;
 	chars: number;
 	readonly ancestors: WeakSet<object>;
+	readonly definitions: Map<string, unknown>;
 }
 class SchemaBudgetExceeded extends Error {}
 function spend(budget: ProjectionBudget, work: number, chars = 0): void {
@@ -83,8 +87,10 @@ const JSON_TYPES = new Set(["object", "array", "string", "number", "integer", "b
 const HIDDEN_KEYS = new Set(["~kind", "~optional", "~readonly", "~immutable", "~unsafe"]);
 const KNOWN_KINDS = new Set([
 	"Object", "Array", "String", "Number", "Integer", "Boolean", "Null", "Literal",
-	"Union", "Intersect", "Enum", "Unknown", "Any",
+	"Union", "Intersect", "Enum", "Unknown", "Any", "Record", "Ref", "Cyclic",
 ]);
+// Pattern keys TypeBox and hand-written schemas use for "any property name".
+const ANY_NAME = new Set(["^.*$", "^(.*)$", ".*", "^[\\s\\S]*$"]);
 
 /** Include non-enumerable keys (TypeBox validators can be hidden), but reject
  * custom prototypes, symbols and accessors rather than losing their semantics. */
@@ -101,6 +107,30 @@ function plainEntries(value: object, budget: ProjectionBudget): Array<[string, u
 		entries.push([key, descriptor.value]);
 	}
 	return entries;
+}
+
+/** Register the root's local definitions under every `$ref` form naming them:
+ * JSON pointers, and TypeBox Cyclic's bare names that resolve through `$id`.
+ * Reads own data descriptors only, so accessors and proxies are never invoked. */
+function collectDefinitions(root: unknown, budget: ProjectionBudget): SchemaOmissionReason | undefined {
+	if (!root || typeof root !== "object" || types.isProxy(root) || Array.isArray(root)) return undefined;
+	for (const keyword of ["$defs", "definitions"]) {
+		const descriptor = Object.getOwnPropertyDescriptor(root, keyword);
+		if (!descriptor) continue;
+		if (!("value" in descriptor)) return "unsupported_keyword";
+		const definitions: unknown = descriptor.value;
+		if (types.isProxy(definitions)) return "unsupported_keyword";
+		if (!definitions || typeof definitions !== "object" || Array.isArray(definitions)) return "invalid_keyword_value";
+		const entries = plainEntries(definitions, budget);
+		if (!entries) return "invalid_keyword_value";
+		for (const [name, schema] of entries) {
+			if (/[~/%]/u.test(name)) continue;
+			budget.definitions.set(`#/${keyword}/${name}`, schema);
+			if (keyword === "$defs" && schema && typeof schema === "object" && !types.isProxy(schema) &&
+				Object.getOwnPropertyDescriptor(schema, "$id")?.value === name) budget.definitions.set(name, schema);
+		}
+	}
+	return undefined;
 }
 
 function sanitizeSchema(value: unknown, depth: number, budget: ProjectionBudget): Projection {
@@ -122,6 +152,7 @@ function sanitizeNode(value: object, depth: number, budget: ProjectionBudget): P
 	const entries = plainEntries(value, budget);
 	if (!entries) return { reason: "unsupported_keyword" };
 	const output: Record<string, unknown> = {};
+	let ref: unknown;
 	for (const [key, candidate] of entries) {
 		if (key.startsWith("~")) {
 			if (!HIDDEN_KEYS.has(key)) return { reason: "unsupported_keyword" };
@@ -132,6 +163,34 @@ function sanitizeNode(value: object, depth: number, budget: ProjectionBudget): P
 		}
 		if (candidate === undefined && METADATA_KEYS.has(key)) continue;
 		if (ANNOTATION_KEYS.has(key)) continue;
+		if (key === "$defs" || key === "definitions") {
+			// Root definitions are inlined where referenced; nested scopes are not resolved.
+			if (depth === 0) continue;
+			return { reason: "unsupported_keyword" };
+		}
+		if (key === "$ref") {
+			ref = candidate;
+			continue;
+		}
+		if (key === "patternProperties") {
+			// Only a catch-all pattern with no other property rules is an
+			// ordinary map, which additionalProperties expresses exactly.
+			if (types.isProxy(candidate)) return { reason: "unsupported_keyword" };
+			if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+				return { reason: "invalid_keyword_value" };
+			}
+			const patterns = plainEntries(candidate, budget);
+			if (!patterns) return { reason: "invalid_keyword_value" };
+			if (patterns.length !== 1 || !ANY_NAME.has(patterns[0]![0]) ||
+				entries.some(([name]) => name === "additionalProperties" || name === "properties")) {
+				return { reason: "unsupported_keyword" };
+			}
+			spend(budget, 0, "additionalProperties".length + 3);
+			const sanitized = sanitizeSchema(patterns[0]![1], depth + 1, budget);
+			if ("reason" in sanitized) return sanitized;
+			output.additionalProperties = sanitized.schema;
+			continue;
+		}
 		if (key === "default") {
 			// Defaults are annotations, not constraints. Never walk non-scalar
 			// defaults: they can contain arbitrary cycles or executable objects.
@@ -206,6 +265,19 @@ function sanitizeNode(value: object, depth: number, budget: ProjectionBudget): P
 		for (const item of scalars) chars += scalarChars(item);
 		spend(budget, 0, chars);
 		output[key] = list ?? candidate;
+	}
+	if (ref !== undefined) {
+		if (typeof ref !== "string") return { reason: "invalid_keyword_value" };
+		// Annotations may sit beside a reference; constraints would need allOf merging.
+		if (Object.keys(output).some((key) => key !== "title" && key !== "description" && key !== "default")) {
+			return { reason: "unsupported_keyword" };
+		}
+		// Remote and missing references are unsupported. Re-entering a definition
+		// on its own path fails as cyclic_schema through the ancestor set.
+		if (!budget.definitions.has(ref)) return { reason: "unsupported_keyword" };
+		const inlined = sanitizeSchema(budget.definitions.get(ref), depth + 1, budget);
+		if ("reason" in inlined) return inlined;
+		return { schema: { ...inlined.schema, ...output } };
 	}
 	// A singleton enum also supports MCP consumers which ignore const.
 	if ("const" in output && !("enum" in output)) {

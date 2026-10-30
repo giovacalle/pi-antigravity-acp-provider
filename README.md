@@ -10,7 +10,7 @@ A first-class [Pi](https://github.com/earendil-works/pi) provider for **Google A
 - Uses ACP protocol v1 and the official TypeScript SDK.
 - Collapses Antigravity's effort-qualified IDs into one entry per model; Pi's Shift+Tab reasoning control selects low/medium/high dynamically.
 - Supports Pi streaming, cancellation, usage/quota metadata, lifecycle cleanup, and persisted ACP session restoration across Pi restarts.
-- Routes compatible Pi tools through an authenticated loopback MCP bridge; doctor/status names omitted tools and their reasons. Pi tools are loaded eagerly so the model calls them directly; results larger than 48 KiB reach the model truncated by Antigravity.
+- Routes compatible Pi tools through an authenticated loopback MCP bridge; string-keyed `Type.Record` and local `$ref`/`$defs` (including non-recursive TypeBox `Cyclic`) are projected. A tool that still cannot be projected (tuples, `not`, conditionals, recursive references) is omitted, reported once per Pi session with a warning, and listed with its reason by doctor/status. Pi tools are loaded eagerly so the model calls them directly; results larger than 48 KiB reach the model truncated by Antigravity.
 - Supports persisted `default`, `auto-edit`, and `yolo` Antigravity permission modes. The requested default is `yolo`; switching to a prompting mode retains the single-use, fail-closed Pi permission broker.
 - Advertises no ACP filesystem or terminal client capabilities.
 - Provides setup, auth-health, logout/account-switching, qualification, quota, and runtime-update commands.
