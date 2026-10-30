@@ -63,6 +63,8 @@ export class AntigravityAcpConnection {
 	private readonly watchdogs = new Map<string, PromptWatchdog>();
 	private readonly protocolFailure: Promise<never>;
 	private readonly processFailure: Promise<never>;
+	/** Session creations, loads and resumes attempted here; agy keeps a harness for each until the process exits. */
+	sessionSetups = 0;
 	private readonly sessions = new Map<string, SessionState>();
 	private readonly sessionCwds = new Map<string, string>();
 	private readonly sessionScopedFaults: boolean;
@@ -189,6 +191,7 @@ export class AntigravityAcpConnection {
 		mcpServers: McpServer[] = [],
 		meta?: Record<string, unknown>,
 	): Promise<AcpNewSessionResponse> {
+		this.sessionSetups += 1;
 		await this.initialize();
 		const response = await this.withSystemSkillCleanup(cwd, () => this.withAbort(
 			this.withDeadline(
@@ -215,6 +218,7 @@ export class AntigravityAcpConnection {
 		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
 		this.assertSessionUsable(sessionId);
+		this.sessionSetups += 1;
 		await this.initialize();
 		const response = await this.withSystemSkillCleanup(cwd, () => this.withAbort(
 			this.withDeadline(
@@ -236,6 +240,7 @@ export class AntigravityAcpConnection {
 		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
 		this.assertSessionUsable(sessionId);
+		this.sessionSetups += 1;
 		await this.initialize();
 		const response = await this.withSystemSkillCleanup(cwd, () => this.withAbort(
 			this.withDeadline(
