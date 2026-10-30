@@ -579,6 +579,23 @@ describe("shared process", () => {
 		expect(connections).toHaveLength(2);
 	});
 
+	it("closes every shared process once its sessions go idle", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+		try {
+			const { runtime, connections } = setup(undefined, "yolo", undefined, { sharedProcess: true, idleTtlMs: 1_000 });
+			const turns = await Promise.all([turn(runtime, [user("hello")], "A"), turn(runtime, [user("hello")], "B")]);
+			expect(turns.map((message) => message.stopReason)).toEqual(["stop", "stop"]);
+
+			vi.advanceTimersByTime(2_000);
+
+			await connections[0]!.process.exited;
+			expect((await runtime.snapshot()).bindings).toBe(0);
+			expect(connections.every((connection) => !connection.process.alive)).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("fails every session on a process that exits", async () => {
 		const { runtime, connections } = setup(undefined, "yolo", undefined, { sharedProcess: true });
 
