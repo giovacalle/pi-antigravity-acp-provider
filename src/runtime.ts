@@ -162,6 +162,7 @@ export class AntigravityRuntime {
 	private bindingEpoch = 0;
 	private readonly activeConnections = new Set<AntigravityAcpConnection>();
 	private readonly queues = new Map<string, Promise<void>>();
+	private readonly enteringTurns = new Map<string, number>();
 	private readonly sessionCwds = new Map<string, string>();
 	private modeChanges = Promise.resolve();
 
@@ -210,8 +211,19 @@ export class AntigravityRuntime {
 				tools: getCurrentTools(transcript.messages),
 			};
 			currentSystemInstructions(resolvedContext);
-			void this.runQueued(model, resolvedContext, options, writer).catch((error: unknown) => {
+			// One-off requests (e.g. compaction summaries) never keep or save a session.
+			const persistent = Boolean(options.sessionId) && options.cacheRetention !== "none";
+			const key = persistent
+				? `sid:${options.sessionId}`
+				: (this.findContinuationKey(resolvedContext) ?? `ephemeral:${crypto.randomUUID()}`);
+			// Reserved synchronously so cap eviction and the idle sweep never pick a session whose turn is starting.
+			this.enteringTurns.set(key, (this.enteringTurns.get(key) ?? 0) + 1);
+			void this.runQueued(model, resolvedContext, options, writer, key, persistent).catch((error: unknown) => {
 				writer.fail(error, options.signal?.aborted === true || isAbort(error));
+			}).finally(() => {
+				const count = (this.enteringTurns.get(key) ?? 1) - 1;
+				if (count > 0) this.enteringTurns.set(key, count);
+				else this.enteringTurns.delete(key);
 			});
 		} catch (error) {
 			writer.fail(error, options.signal?.aborted === true || isAbort(error));
@@ -479,7 +491,7 @@ export class AntigravityRuntime {
 
 	private isIdle(binding: Binding): boolean {
 		return !binding.turnCompletion && !binding.permission && binding.pendingTools.size === 0 &&
-			!this.queues.has(binding.key);
+			!this.queues.has(binding.key) && !this.enteringTurns.has(binding.key);
 	}
 
 	private async closeBindings(): Promise<void> {
@@ -509,17 +521,14 @@ export class AntigravityRuntime {
 		context: Context,
 		options: SimpleStreamOptions,
 		writer: PiEventWriter,
+		key: string,
+		persistent: boolean,
 	): Promise<void> {
 		this.assertActive();
 		const epoch = this.bindingEpoch;
 		if (this.ensureAgent) await ensureAntigravityAcpReady();
 		await this.modeChanges;
 		this.assertEpoch(epoch);
-		// One-off requests (e.g. compaction summaries) never keep or save a session.
-		const persistent = Boolean(options.sessionId) && options.cacheRetention !== "none";
-		const key = persistent
-			? `sid:${options.sessionId}`
-			: (this.findContinuationKey(context) ?? `ephemeral:${crypto.randomUUID()}`);
 		const tools = context.tools ?? [];
 		const acpModelId = resolveAcpModelId(model, options.reasoning);
 		let binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
