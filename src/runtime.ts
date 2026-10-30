@@ -25,6 +25,7 @@ import {
 } from "./acp/antigravity.js";
 import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./acp/connection.js";
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
+import { quotaExhaustion } from "./acp/quota.js";
 import { AcpSessionStore } from "./acp/session-store.js";
 import { sessionModels, sessionModes, type AcpModelInfo, type AcpNewSessionResponse, type SessionState } from "./acp/session-state.js";
 import {
@@ -667,6 +668,14 @@ export class AntigravityRuntime {
 			if (binding.abortRequested) throw abortError();
 			const usage = usageFromPrompt(response);
 			this.metrics.record(response, usage);
+			// agy reports exhaustion as an ordinary reply; fail it before the turn is persisted.
+			const quota = usage.totalTokens === 0 || response.stopReason === "refusal"
+				? quotaExhaustion(activeWriter.message.content.map((block) => block.type === "text" ? block.text : "").join(""))
+				: undefined;
+			if (quota) {
+				throw new AntigravityAcpError("quota",
+					`Antigravity quota exceeded for ${binding.modelId}.${quota.resetAt ? ` Resets at ${quota.resetAt}.` : ""}`);
+			}
 			if (binding.contextUsed !== undefined) {
 				// Pi sizes the context from the last message's totalTokens, but the response sums every
 				// inference. agy adds cache reads to `used` twice; with one inference the response's cache
