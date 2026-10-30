@@ -241,7 +241,7 @@ for await (const line of rl) {
 		// Handoffs carry the original request explicitly, but tell the agent not
 		// to repeat completed actions. Model that instruction rather than treating
 		// scenario keywords in the replayed request as a fresh tool invocation.
-		const continuing = params.prompt.some((block) => block.type === "text" && block.text.startsWith("Continue the current Pi user request"));
+		const continuing = params.prompt.some((block) => block.type === "text" && block.text.includes("Continue the current Pi user request"));
 		if (/^\/usage(?:\s|$)/iu.test(text.trim())) {
 			const reply = scenario === "usage-unavailable"
 				? "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- Unable to retrieve quota status (backend unavailable)"
