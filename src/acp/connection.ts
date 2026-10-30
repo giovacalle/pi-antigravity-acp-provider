@@ -65,6 +65,8 @@ export class AntigravityAcpConnection {
 	sessionSetups = 0;
 	private readonly sessions = new Map<string, SessionState>();
 	private readonly sessionCwds = new Map<string, string>();
+	// Includes setups that were aborted or failed: agy may still write the tree after the client gave up.
+	private readonly setupCwds = new Set<string>();
 	private readonly sessionScopedFaults: boolean;
 	private readonly livenessTimeoutMs: number;
 	private readonly lostSessions = new Set<string>();
@@ -380,7 +382,7 @@ export class AntigravityAcpConnection {
 
 	async close(): Promise<void> {
 		this.closePromise ??= this.process.close().finally(() => {
-			for (const cwd of new Set(this.sessionCwds.values())) removeSystemSkillTree(cwd);
+			for (const cwd of this.setupCwds) removeSystemSkillTree(cwd);
 		});
 		await this.closePromise;
 	}
@@ -420,6 +422,7 @@ export class AntigravityAcpConnection {
 
 	private async withSystemSkillCleanup<T>(cwd: string, setup: () => Promise<T>): Promise<T> {
 		rememberSystemSkillTree(cwd);
+		this.setupCwds.add(cwd);
 		try {
 			return await setup();
 		} finally {
