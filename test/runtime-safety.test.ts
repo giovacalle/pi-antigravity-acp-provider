@@ -1019,6 +1019,15 @@ describe("throwaway conversations", () => {
 	const userFiles = [".db", ".db-shm", ".db-wal", ".meta"].map((suffix) => userSid + suffix).sort();
 	afterEach(() => { vi.unstubAllEnvs(); });
 
+	it("removes the conversation model discovery creates and nothing else", async () => {
+		const { root, runtime, connections } = setup();
+		const store = conversationsIn(root);
+		expect(await runtime.discoverModels("test-key")).toHaveLength(2);
+		await connections[0]!.process.exited;
+		expect(store.files()).toEqual(userFiles);
+		expect(store.token()).toBe(true);
+	});
+
 	it("removes the conversation a quota read creates and nothing else", async () => {
 		const { root, runtime, connections } = setup();
 		const store = conversationsIn(root);
@@ -1035,6 +1044,9 @@ describe("throwaway conversations", () => {
 		const afterTurn = store.files();
 		expect(afterTurn).toHaveLength(8);
 		await runtime.quota(undefined);
+		await connections.at(-1)!.process.exited;
+		expect(store.files()).toEqual(afterTurn);
+		await runtime.discoverModels("test-key");
 		await connections.at(-1)!.process.exited;
 		expect(store.files()).toEqual(afterTurn);
 	});
