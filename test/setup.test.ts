@@ -237,6 +237,50 @@ describe("managed runtime readiness", () => {
 	});
 });
 
+describe("stale install staging", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("removes staging directories left by interrupted installs and nothing else", async () => {
+		const home = temporaryDirectory();
+		const root = path.join(home, ".local", "opt", "agy-acp");
+		const versions = path.join(root, "versions");
+		fs.mkdirSync(path.join(versions, ".install-stale"), { recursive: true });
+		fs.writeFileSync(path.join(versions, ".install-stale", "download.zip"), "partial");
+		fs.mkdirSync(path.join(versions, "keep-me"));
+		fs.mkdirSync(path.join(root, "current"));
+		vi.spyOn(os, "homedir").mockReturnValue(home);
+		vi.stubEnv("AGY_ACP_BIN", "");
+		vi.stubEnv("PATH", temporaryDirectory());
+		vi.stubEnv("GEMINI_HOME", temporaryDirectory());
+		vi.stubEnv("PI_CODING_AGENT_DIR", temporaryDirectory());
+		vi.resetModules();
+		const setup = await import("../src/acp/setup.js");
+		const release = latestManifestRelease(readBundledRuntimeManifest());
+		const asset = release.platforms[setup.platformKey()]!;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => {
+				if (url.includes("agentclientprotocol/registry")) {
+					return Response.json({
+						version: release.version,
+						distribution: { binary: { [setup.platformKey()]: { archive: asset.archive } } },
+					});
+				}
+				if (url === asset.archive) return new Response("unavailable", { status: 503 });
+				throw new Error("offline");
+			}),
+		);
+
+		await expect(setup.updateAntigravityAcpRuntime()).rejects.toThrow("HTTP 503");
+
+		expect(fs.readdirSync(versions).sort()).toEqual(["keep-me"]);
+		expect(fs.existsSync(path.join(root, "current"))).toBe(true);
+		expect(fs.existsSync(path.join(root, ".update-lock"))).toBe(false);
+	});
+});
+
 function temporaryDirectory(): string {
 	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-setup-"));
 	directories.push(directory);
