@@ -295,6 +295,6 @@ function formatQuota(snapshot: AntigravityQuotaSnapshot): string {
 		"Antigravity quota:",
 		...snapshot.groups.map((group) => `  ${group.displayName}: ${group.buckets.length
 			? group.buckets.map((bucket) => `${bucket.window} ${Math.round(bucket.remainingFraction * 100)}%${bucket.resetTime ? ` (resets ${bucket.resetTime})` : ""}`).join(", ")
-			: "no active limits"}`),
+			: "no percentage limits reported"}`),
 	].join("\n");
 }

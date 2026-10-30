@@ -407,6 +407,7 @@ export class AntigravityRuntime {
 
 	async logout(): Promise<void> {
 		await this.closeBindings();
+		this.quotaCache = undefined;
 		this.sessionStore?.clear();
 		clearAntigravityCredentials();
 	}

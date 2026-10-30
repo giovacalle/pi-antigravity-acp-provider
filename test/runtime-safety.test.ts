@@ -292,6 +292,19 @@ describe("live quota", () => {
 		expect(connections).toHaveLength(2);
 	});
 
+	it("drops the cached snapshot on logout", async () => {
+		const { root, runtime, connections } = setup();
+		vi.stubEnv("GEMINI_HOME", path.join(root, "gemini"));
+		try {
+			await runtime.quota(undefined);
+			await runtime.logout();
+			await runtime.quota(undefined);
+			expect(connections).toHaveLength(2);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("does not cache a failed quota read", async () => {
 		const { runtime, connections } = setup("usage-unavailable");
 		await expect(runtime.quota(undefined)).rejects.toThrow("Unable to retrieve quota status (backend unavailable)");
