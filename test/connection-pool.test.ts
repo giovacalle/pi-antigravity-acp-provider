@@ -44,19 +44,22 @@ describe("AcpConnectionPool", () => {
 		expect(leases[2]!.connection).not.toBe(leases[0]!.connection);
 	});
 
-	it("drops and counts updates for a session no lease registered", async () => {
+	it("drops and counts updates and permission requests for a session no lease registered", async () => {
 		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4 });
 		const lease = await pool.acquire("managed", opener().open);
 		const owned = await lease.connection.newSession(tmp());
 		const stray = await lease.connection.newSession(tmp());
 		const received: SessionNotification[] = [];
 		lease.register(owned.sessionId, { onUpdate: (notification) => { received.push(notification); } });
+		// A restore that fell back to a new session gives its registration up.
+		lease.register(stray.sessionId, { onUpdate: (notification) => { received.push(notification); } })();
 
 		await lease.connection.prompt({ sessionId: stray.sessionId, prompt: [{ type: "text", text: "hello" }] });
 		const decision = await lease.connection.prompt({ sessionId: stray.sessionId, prompt: [{ type: "text", text: "permission" }] });
 
 		expect(received).toEqual([]);
-		expect(pool.unknownSessionUpdates).toBe(3);
+		// Two updates for "hello", then the permission request and its decision update.
+		expect(pool.unknownSessionMessages).toBe(4);
 		expect(decision.stopReason).toBe("end_turn");
 	});
 
