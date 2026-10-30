@@ -68,6 +68,7 @@ export function buildPromptParts(
 	context: Context,
 	fresh: boolean,
 	unseenStart?: number,
+	instructionsInPrompt = true,
 ): PromptParts {
 	const latestIndex = findLatestUserIndex(context.messages);
 	if (latestIndex < 0) throw new AntigravityAcpError("invalid_input", "No user message to send to Antigravity ACP");
@@ -88,7 +89,7 @@ export function buildPromptParts(
 	const prompt: ContentBlock[] = [];
 	if (fresh) {
 		const sections: string[] = [];
-		const instructions = currentSystemInstructions(context);
+		const instructions = instructionsInPrompt ? currentSystemInstructions(context) : "";
 		if (instructions) sections.push(`# Pi session instructions\n\n${instructions}`);
 		const history = boundedSection(HISTORY_HEADING, historyEntries(context.messages, 0, historyEnd, latestIndex, pinStart));
 		if (history) sections.push(history);
