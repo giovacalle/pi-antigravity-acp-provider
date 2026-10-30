@@ -13,15 +13,20 @@ const modern = scenario?.startsWith("config-options") || scenario === "effort-se
 // silently ignores an effort-qualified id; these scenarios model that.
 const qualifiedModelRejected = scenario === "effort-selector" || scenario === "legacy-set-model";
 const effortSelector = scenario === "effort-selector";
-const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
-let model = "auto";
-let mode = "default";
-let effort = "high";
-let permissionPromptId;
-let hangingPromptId;
-let bridgePromptId;
-let mcpServer;
-const sessionCwds = new Map();
+// Prompt ids still awaiting a response, by session id.
+const inFlight = new Map();
+const send = (value) => {
+	if (value.method === undefined) for (const [sessionId, promptId] of inFlight) if (promptId === value.id) inFlight.delete(sessionId);
+	process.stdout.write(`${JSON.stringify(value)}\n`);
+};
+let sessionCount = 0;
+let frozen = false;
+const sessions = new Map();
+// Any id can be loaded or resumed, so state starts with defaults on first use.
+const state = (sessionId) => {
+	if (!sessions.has(sessionId)) sessions.set(sessionId, { model: "auto", mode: "default", effort: "high" });
+	return sessions.get(sessionId);
+};
 // agy 1.4.x writes this guide into the session cwd on setup and again at each
 // prompt when it is missing.
 const writeSystemSkill = (cwd) => {
@@ -32,39 +37,36 @@ const writeSystemSkill = (cwd) => {
 };
 
 for await (const line of rl) {
-	if (!line.trim()) continue;
+	if (frozen || !line.trim()) continue;
 	const message = JSON.parse(line);
 	if (!("id" in message)) {
-		if (message.method === "session/cancel" && hangingPromptId !== undefined) {
-			send({ jsonrpc: "2.0", id: hangingPromptId, result: { stopReason: "cancelled" } });
-			hangingPromptId = undefined;
-		}
-		if (message.method === "session/cancel" && permissionPromptId !== undefined) {
-			send({ jsonrpc: "2.0", id: permissionPromptId, result: { stopReason: "cancelled" } });
-			permissionPromptId = undefined;
-		}
-		if (message.method === "session/cancel" && bridgePromptId !== undefined) {
-			send({ jsonrpc: "2.0", id: bridgePromptId, result: { stopReason: "cancelled" } });
-			bridgePromptId = undefined;
+		if (message.method !== "session/cancel") continue;
+		const session = state(message.params.sessionId);
+		for (const pending of ["hanging", "permission", "bridge"]) {
+			if (session[pending] === undefined) continue;
+			send({ jsonrpc: "2.0", id: session[pending], result: { stopReason: "cancelled" } });
+			session[pending] = undefined;
 		}
 		continue;
 	}
 	const { id, method, params } = message;
 	if (process.env.FAKE_AGENT_LOG_FILE && method) fs.appendFileSync(process.env.FAKE_AGENT_LOG_FILE,
-		JSON.stringify({ method, ...(method === "session/prompt" ? { prompt: params.prompt, mode } : {}), ...(method === "session/set_mode" ? { modeId: params.modeId } : {}), ...(method === "session/new" ? { cwd: params.cwd } : {}), ...(["session/new", "session/load", "session/resume"].includes(method) && params && "_meta" in params ? { _meta: params._meta } : {}) }) + "\n");
-	if (id === "permission-1" && method === undefined) {
-		if (permissionPromptId === undefined) continue;
+		JSON.stringify({ method, ...(method === "session/prompt" ? { prompt: params.prompt, mode: state(params.sessionId).mode } : {}), ...(method === "session/set_mode" ? { modeId: params.modeId } : {}), ...(method === "session/new" ? { cwd: params.cwd } : {}), ...(["session/new", "session/load", "session/resume"].includes(method) && params && "_meta" in params ? { _meta: params._meta } : {}) }) + "\n");
+	if (typeof id === "string" && id.startsWith("permission-") && method === undefined) {
+		const sessionId = id.slice("permission-".length);
+		const session = state(sessionId);
+		if (session.permission === undefined) continue;
 		const decision = message.result?.outcome?.outcome ?? "cancelled";
 		send({
 			jsonrpc: "2.0",
 			method: "session/update",
 			params: {
-				sessionId: "fake-session",
+				sessionId,
 				update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Decision: ${decision}` } },
 			},
 		});
-		send({ jsonrpc: "2.0", id: permissionPromptId, result: { stopReason: "end_turn" } });
-		permissionPromptId = undefined;
+		send({ jsonrpc: "2.0", id: session.permission, result: { stopReason: "end_turn" } });
+		session.permission = undefined;
 	} else if (method === "initialize") {
 		if (scenario === "initialize-timeout") continue;
 		if (scenario === "malformed-output") {
@@ -140,17 +142,19 @@ for await (const line of rl) {
 			});
 			continue;
 		}
-		mcpServer = params.mcpServers?.find((server) => server.type === "http");
-		sessionCwds.set("fake-session", params.cwd);
+		const sessionId = `fake-session-${++sessionCount}`;
+		const session = state(sessionId);
+		session.mcpServer = params.mcpServers?.find((server) => server.type === "http");
+		session.cwd = params.cwd;
 		writeSystemSkill(params.cwd);
 		send({
 			jsonrpc: "2.0",
 			id,
-			result: modern ? { sessionId: "fake-session", configOptions: sessionConfigOptions() } : {
-				sessionId: "fake-session",
-				modes: sessionModes(),
+			result: modern ? { sessionId, configOptions: sessionConfigOptions(session) } : {
+				sessionId,
+				modes: sessionModes(session),
 				models: {
-					currentModelId: model,
+					currentModelId: session.model,
 					availableModels: [
 						{ modelId: "auto", name: "Auto" },
 						{ modelId: "gemini-test", name: "Gemini Test" },
@@ -159,47 +163,56 @@ for await (const line of rl) {
 			},
 		});
 	} else if (method === "session/resume" || method === "session/load") {
-		sessionCwds.set(params.sessionId, params.cwd);
+		const session = state(params.sessionId);
+		session.cwd = params.cwd;
 		writeSystemSkill(params.cwd);
 		send({
 			jsonrpc: "2.0",
 			id,
-			result: modern ? { configOptions: sessionConfigOptions() } : {
-				modes: sessionModes(true),
-				models: { currentModelId: model, availableModels: [] },
+			result: modern ? { configOptions: sessionConfigOptions(session) } : {
+				modes: sessionModes(session, true),
+				models: { currentModelId: session.model, availableModels: [] },
 			},
 		});
 	} else if (method === "session/set_config_option") {
+		const session = state(params.sessionId);
 		if (params.configId === "model-selector") {
-			if (!qualifiedModelRejected || ["auto", "gemini-test"].includes(params.value)) model = params.value;
-		} else if (params.configId === "thinking-level-selector") effort = params.value;
+			if (!qualifiedModelRejected || ["auto", "gemini-test"].includes(params.value)) session.model = params.value;
+		} else if (params.configId === "thinking-level-selector") session.effort = params.value;
 		else if (params.configId === "permission-selector") {
-			if (scenario !== "config-options-ignored-mode") mode = params.value;
+			if (scenario !== "config-options-ignored-mode") session.mode = params.value;
 		}
 		else {
 			send({ jsonrpc: "2.0", id, error: { code: -32602, message: "Unknown selector" } });
 			continue;
 		}
-		send({ jsonrpc: "2.0", id, result: { configOptions: sessionConfigOptions() } });
+		send({ jsonrpc: "2.0", id, result: { configOptions: sessionConfigOptions(session) } });
 	} else if (modern && (method === "session/set_model" || method === "session/set_mode")) {
 		if (scenario === "legacy-set-model" && method === "session/set_model") {
-			model = params.modelId;
+			state(params.sessionId).model = params.modelId;
 			send({ jsonrpc: "2.0", id, result: {} });
 			continue;
 		}
 		send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Use config options" } });
 	} else if (method === "session/set_model") {
-		model = params.modelId;
+		state(params.sessionId).model = params.modelId;
 		send({ jsonrpc: "2.0", id, result: {} });
 	} else if (method === "session/set_mode") {
 		if (scenario === "set-mode-fails" && params.modeId === "auto_edit") {
 			send({ jsonrpc: "2.0", id, error: { code: -32602, message: "Mode change refused" } });
 			continue;
 		}
-		mode = params.modeId;
+		state(params.sessionId).mode = params.modeId;
 		send({ jsonrpc: "2.0", id, result: {} });
 	} else if (method === "session/prompt") {
-		writeSystemSkill(sessionCwds.get(params.sessionId));
+		// agy refuses a prompt while the same session still runs a turn.
+		if (inFlight.has(params.sessionId)) {
+			send({ jsonrpc: "2.0", id, error: { code: -32603, message: "Concurrent receive_steps() calls are not supported on this connection." } });
+			continue;
+		}
+		inFlight.set(params.sessionId, id);
+		const session = state(params.sessionId);
+		writeSystemSkill(session.cwd);
 		const text = params.prompt.filter((block) => block.type === "text").map((block) => block.text).join("\n");
 		// agy runs these slash commands itself instead of prompting the model.
 		const joined = params.prompt.filter((block) => block.type === "text").map((block) => block.text).join("").trim();
@@ -214,30 +227,40 @@ for await (const line of rl) {
 			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
 			continue;
 		}
+		if (text === "crash process") process.exit(1);
+		if (text === "freeze process") {
+			frozen = true;
+			continue;
+		}
+		if (text === "ignore cancel") continue;
 		// Handoffs carry the original request explicitly, but tell the agent not
 		// to repeat completed actions. Model that instruction rather than treating
 		// scenario keywords in the replayed request as a fresh tool invocation.
 		const continuing = params.prompt.some((block) => block.type === "text" && block.text.startsWith("Continue the current Pi user request"));
 		if (scenario === "mode-drift" || scenario === "config-options-mode-drift") {
-			mode = "yolo";
+			session.mode = "yolo";
 			send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId,
-				update: modern ? { sessionUpdate: "config_option_update", configOptions: sessionConfigOptions() }
-					: { sessionUpdate: "current_mode_update", currentModeId: mode } } });
+				update: modern ? { sessionUpdate: "config_option_update", configOptions: sessionConfigOptions(session) }
+					: { sessionUpdate: "current_mode_update", currentModeId: session.mode } } });
 		}
-		if (text === "stream progress" || text === "native work" || text === "native stuck") {
-			hangingPromptId = id;
+		// `count <n> <marker>` streams `<marker><i>;` chunks on a timer, so
+		// concurrent sessions interleave.
+		const counting = /^count (\d+) (\S+)$/u.exec(text);
+		if (counting || text === "stream progress" || text === "native work" || text === "native stuck") {
+			session.hanging = id;
 			const notify = (update) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId, update } });
 			if (text.startsWith("native")) notify({ sessionUpdate: "tool_call_update", toolCallId: "native", status: "in_progress" });
 			if (text === "native stuck") continue;
 			let count = 0;
 			const timer = setInterval(() => {
-				if (hangingPromptId !== id) { clearInterval(timer); return; }
+				if (session.hanging !== id) { clearInterval(timer); return; }
 				count++;
 				if (text === "stream progress") notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "." } });
-				if (count < 8) return;
+				if (counting) notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${counting[2]}${count};` } });
+				if (count < (counting ? Number(counting[1]) : 8)) return;
 				clearInterval(timer);
 				if (text === "native work") notify({ sessionUpdate: "tool_call_update", toolCallId: "native", status: "completed" });
-				hangingPromptId = undefined;
+				session.hanging = undefined;
 				send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
 			}, Number(process.env.FAKE_PROGRESS_STEP_MS ?? 30));
 			continue;
@@ -245,8 +268,9 @@ for await (const line of rl) {
 		const notify = (update) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId, update } });
 		// agy reports the context size after each inference; setup sends used: 0.
 		const usageUpdate = (used) => notify({ sessionUpdate: "usage_update", used, size: 1048576 });
+		const mcpServer = session.mcpServer;
 		if (!continuing && text.includes("bridge") && mcpServer) {
-			bridgePromptId = id;
+			session.bridge = id;
 			const reportUsage = text.includes("usage");
 			if (reportUsage) { usageUpdate(0); usageUpdate(1000); }
 			const invocation = text.includes("parallel")
@@ -261,8 +285,8 @@ for await (const line of rl) {
 				: invokeMcpTool(mcpServer, "from gemini");
 			void invocation.then(async (result) => {
 				if (text.includes("bridge delayed")) await new Promise((resolve) => setTimeout(resolve, 500));
-				if (bridgePromptId !== id) return;
-				bridgePromptId = undefined;
+				if (session.bridge !== id) return;
+				session.bridge = undefined;
 				if (reportUsage) usageUpdate(1800);
 				send({
 					jsonrpc: "2.0",
@@ -295,14 +319,14 @@ for await (const line of rl) {
 			continue;
 		}
 		if (!continuing && text.includes("hang")) {
-			hangingPromptId = id;
+			session.hanging = id;
 			continue;
 		}
 		if (!continuing && text.includes("permission")) {
-			permissionPromptId = id;
+			session.permission = id;
 			send({
 				jsonrpc: "2.0",
-				id: "permission-1",
+				id: `permission-${params.sessionId}`,
 				method: "session/request_permission",
 				params: {
 					sessionId: params.sessionId,
@@ -344,24 +368,24 @@ for await (const line of rl) {
 	}
 }
 
-function sessionModes(restored = false) {
+function sessionModes(session, restored = false) {
 	if (scenario === "no-mode-metadata") return undefined;
 	const unavailable = scenario === "no-auto-edit-mode" ? "auto_edit"
 		: scenario === "no-default-mode" || (restored && scenario === "no-default-on-restore") ? "default" : undefined;
-	return { currentModeId: mode, availableModes: ["default", "auto_edit", "yolo"].filter((id) => id !== unavailable).map((id) => ({ id, name: id })) };
+	return { currentModeId: session.mode, availableModes: ["default", "auto_edit", "yolo"].filter((id) => id !== unavailable).map((id) => ({ id, name: id })) };
 }
 
-function sessionConfigOptions() {
+function sessionConfigOptions(session) {
 	return [
-		{ id: "model-selector", name: "Model", category: "model", type: "select", currentValue: model,
+		{ id: "model-selector", name: "Model", category: "model", type: "select", currentValue: session.model,
 			options: [{ group: "google", name: "Google", options: [
 				{ value: "auto", name: "Auto" }, { value: "gemini-test", name: "Gemini Test" },
 			] }] },
-		...(effortSelector || (scenario === "config-options-disappearing-thought" && model === "auto")
+		...(effortSelector || (scenario === "config-options-disappearing-thought" && session.model === "auto")
 			? [{ id: "thinking-level-selector", name: "Thinking", category: "thought_level", type: "select",
-				currentValue: effort, options: ["low", "medium", "high"].map((value) => ({ value, name: value })) }]
+				currentValue: session.effort, options: ["low", "medium", "high"].map((value) => ({ value, name: value })) }]
 			: []),
-		{ id: "permission-selector", name: "Permissions", category: "mode", type: "select", currentValue: mode,
+		{ id: "permission-selector", name: "Permissions", category: "mode", type: "select", currentValue: session.mode,
 			options: ["default", "auto_edit", "yolo"].map((value) => ({ value, name: value })) },
 	];
 }
