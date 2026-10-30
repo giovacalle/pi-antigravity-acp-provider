@@ -817,6 +817,15 @@ describe("tool projection diagnostics", () => {
 		expect((await runtime.snapshot()).processes[0]?.omittedTools).toEqual([{ name: "unsupported", reason: expect.stringContaining(scenario ? "MCP over HTTP" : "not_object") }]);
 	});
 
+	it("hands each omitted tool to the Pi session once, never the permission broker", async () => {
+		const { runtime } = setup();
+		const permission = { name: PERMISSION_TOOL_NAME, description: "broker", parameters: Type.Object({}) };
+		await drain(runtime.stream(model, { tools: [{ name: "unsupported", description: "bad", parameters: Type.String() }, permission], messages: [user("hello")] }, { sessionId: "omissions", apiKey: "test-key" }));
+		expect(runtime.takeNewToolOmissions("omissions")).toEqual([{ name: "unsupported", reason: expect.stringContaining("not_object") }]);
+		expect(runtime.takeNewToolOmissions("omissions")).toEqual([]);
+		expect(runtime.takeNewToolOmissions("unknown")).toEqual([]);
+	});
+
 	it("revalidates changed tools before a continuation early return", async () => {
 		const { runtime, connections, entries } = setup();
 		const first = await drain(runtime.stream(model, { tools, messages: [user("use bridge")] }, { sessionId: "changed-tools", apiKey: "test-key" }));

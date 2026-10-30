@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AntigravityAcpConnection } from "../src/acp/connection.js";
 import { QUOTA_REQUEST_CHANNEL } from "../src/constants.js";
@@ -135,6 +136,19 @@ describe("extension entry point", () => {
 		} finally {
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
+	});
+
+	it("warns once per session about each Pi tool Antigravity cannot use", async () => {
+		const { pi, ctx } = await load("parent");
+		const provider = registry.get("antigravity-acp")!;
+		const tuple = { name: "pair", description: "pair", parameters: Type.Object({ value: Type.Tuple([Type.String(), Type.Number()]) }) };
+		const permission = { name: PERMISSION_TOOL_NAME, description: "broker", parameters: Type.Object({}) };
+		await provider.streamSimple(model, normalizeContext({ tools: [tuple, permission], messages: [user("hello")] }), { sessionId: "parent", apiKey: "test-key" }).result();
+		await pi.emit("turn_end", {}, ctx);
+		await pi.emit("turn_end", {}, ctx);
+		const warnings = ctx.ui.notify.mock.calls.filter(([, level]) => level === "warning");
+		expect(warnings).toEqual([[expect.stringContaining("Antigravity cannot use Pi tool pair: schema omitted (unsupported_keyword)"), "warning"]]);
+		expect(warnings[0]![0]).not.toContain(PERMISSION_TOOL_NAME);
 	});
 
 	it("shares one provider across loads and closes it when the last instance quits", async () => {

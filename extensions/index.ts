@@ -265,6 +265,12 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 		}
 	});
 
+	pi.on("turn_end", (_event, ctx) => {
+		const omitted = runtime.takeNewToolOmissions(ctx.sessionManager.getSessionId());
+		if (omitted.length === 0) return;
+		ctx.ui.notify(omitted.map((tool) => `Antigravity cannot use Pi tool ${tool.name}: ${tool.reason}`).join("\n"), "warning");
+	});
+
 	pi.on("session_shutdown", async (event, ctx) => {
 		unsubscribeQuota();
 		await runtime.closeSession(ctx.sessionManager.getSessionId());
