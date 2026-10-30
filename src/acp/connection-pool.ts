@@ -22,6 +22,18 @@ interface PoolEntry {
 	leases: number;
 	handlers: Map<string, AntigravityConnectionHandlers>;
 	idleTimer: ReturnType<typeof setTimeout> | undefined;
+	unknownSessionMessages: number;
+}
+
+export interface PooledProcessSnapshot {
+	pid?: number;
+	generation: number;
+	/** Live leases. */
+	sessions: number;
+	/** Session setups started on the process. */
+	created: number;
+	draining: boolean;
+	unknownSessionUpdates: number;
 }
 
 /**
@@ -93,6 +105,22 @@ export class AcpConnectionPool {
 		};
 	}
 
+	/** Processes still starting are left out. */
+	snapshot(): PooledProcessSnapshot[] {
+		return this.entries.flatMap(({ connection, leases, unknownSessionMessages }) => {
+			if (!connection) return [];
+			const pid = connection.process.pid;
+			return [{
+				...(pid === undefined ? {} : { pid }),
+				generation: connection.process.generation,
+				sessions: leases,
+				created: connection.sessionSetups,
+				draining: this.draining(connection),
+				unknownSessionUpdates: unknownSessionMessages,
+			}];
+		});
+	}
+
 	/** Forgets every process; the runtime closes the connections themselves. */
 	closeAll(): void {
 		for (const entry of this.entries) clearTimeout(entry.idleTimer);
@@ -134,11 +162,15 @@ export class AcpConnectionPool {
 					const handlers = entry.handlers.get(notification.sessionId);
 					if (handlers) return handlers.onUpdate?.(notification);
 					this.unknownSessionMessages += 1;
+					entry.unknownSessionMessages += 1;
 				},
 				onPermission: (request) => {
 					const handlers = entry.handlers.get(request.sessionId);
 					if (handlers?.onPermission) return handlers.onPermission(request);
-					if (!handlers) this.unknownSessionMessages += 1;
+					if (!handlers) {
+						this.unknownSessionMessages += 1;
+						entry.unknownSessionMessages += 1;
+					}
 					return Promise.resolve({ outcome: { outcome: "cancelled" } });
 				},
 			});
@@ -150,7 +182,7 @@ export class AcpConnectionPool {
 			remove();
 			throw error;
 		});
-		const entry: PoolEntry = { key, opened, connection: undefined, leases: 0, handlers: new Map(), idleTimer: undefined };
+		const entry: PoolEntry = { key, opened, connection: undefined, leases: 0, handlers: new Map(), idleTimer: undefined, unknownSessionMessages: 0 };
 		this.entries.push(entry);
 		return entry;
 	}

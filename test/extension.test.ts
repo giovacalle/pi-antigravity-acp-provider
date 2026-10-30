@@ -43,6 +43,7 @@ afterEach(async () => {
 	for (const { pi, ctx } of loaded.splice(0)) await pi.emit("session_shutdown", { reason: "quit" }, ctx);
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
+	vi.unstubAllGlobals();
 	fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -146,6 +147,22 @@ describe("extension entry point", () => {
 		for (const { pi, ctx } of loaded.splice(0)) await pi.emit("session_shutdown", { reason: "quit" }, ctx);
 
 		expect(connections.every((connection) => !connection.process.alive)).toBe(true);
+	});
+
+	it("shows each shared process with its session count in doctor", async () => {
+		const configDir = path.join(root, "agent", "antigravity-acp-provider");
+		fs.mkdirSync(configDir, { recursive: true });
+		fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ sharedProcess: true }));
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+		const { pi, ctx } = await load("parent");
+
+		await Promise.all([stream([user("hello")], "a"), stream([user("hello")], "b")]);
+		await pi.commands.get("antigravity-acp")!.handler("doctor", ctx as never);
+
+		const text = ctx.ui.notify.mock.calls.at(-1)![0] as string;
+		expect(text).toContain("Shared processes: max 4 per process");
+		expect(text.split("\n").filter((line) => line.includes("sessions=2"))).toHaveLength(1);
+		expect(connections).toHaveLength(1);
 	});
 
 	it("reports process token totals without counting reasoning twice", async () => {

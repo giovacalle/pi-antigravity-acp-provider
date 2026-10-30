@@ -24,7 +24,13 @@ import {
 	type AntigravityAuthHealth,
 } from "./acp/antigravity.js";
 import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./acp/connection.js";
-import { AcpConnectionPool, waitUnlessAborted, type ConnectionLease, type OpenedConnection } from "./acp/connection-pool.js";
+import {
+	AcpConnectionPool,
+	waitUnlessAborted,
+	type ConnectionLease,
+	type OpenedConnection,
+	type PooledProcessSnapshot,
+} from "./acp/connection-pool.js";
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
 import { quotaExhaustion } from "./acp/quota.js";
 import { AcpSessionStore } from "./acp/session-store.js";
@@ -141,6 +147,9 @@ export interface RuntimeSnapshot {
 	capEvictions: number;
 	capOverflows: number;
 	nativeTools: NativeTools;
+	sharedProcess: boolean;
+	maxSessionsPerProcess: number;
+	sharedProcesses: PooledProcessSnapshot[];
 	metrics: ReturnType<RuntimeMetrics["snapshot"]>;
 	processes: Array<{
 		key: string;
@@ -192,6 +201,7 @@ export class AntigravityRuntime {
 	private quotaCache: AntigravityQuotaSnapshot | undefined;
 	private quotaInFlight: Promise<AntigravityQuotaSnapshot> | undefined;
 	private readonly pool: AcpConnectionPool | undefined;
+	private readonly maxSessionsPerProcess: number;
 
 	constructor(
 		connectionFactory?: AntigravityConnectionFactory,
@@ -206,9 +216,10 @@ export class AntigravityRuntime {
 		} = {},
 	) {
 		this.nativeTools = limits.nativeTools ?? "all";
+		this.maxSessionsPerProcess = limits.maxSessionsPerProcess ?? DEFAULT_MAX_SESSIONS_PER_PROCESS;
 		if (limits.sharedProcess) {
 			this.pool = new AcpConnectionPool({
-				maxSessionsPerProcess: limits.maxSessionsPerProcess ?? DEFAULT_MAX_SESSIONS_PER_PROCESS,
+				maxSessionsPerProcess: this.maxSessionsPerProcess,
 				recycleAfterSessions: RECYCLE_AFTER_SESSIONS,
 				idleTtlMs: limits.idleTtlMs ?? DEFAULT_IDLE_TTL_MS,
 			});
@@ -488,6 +499,9 @@ export class AntigravityRuntime {
 			capEvictions: this.capEvictions,
 			capOverflows: this.capOverflows,
 			nativeTools: this.nativeTools,
+			sharedProcess: this.pool !== undefined,
+			maxSessionsPerProcess: this.maxSessionsPerProcess,
+			sharedProcesses: this.pool?.snapshot() ?? [],
 			metrics: this.metrics.snapshot(),
 			processes,
 		};
