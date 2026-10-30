@@ -2,6 +2,7 @@ const SUBCOMMANDS = [
 	{ name: "setup", description: "Install the runtime and sign in" },
 	{ name: "doctor", description: "Inspect runtime, authentication, and sessions", options: ["--verbose"] },
 	{ name: "quota", description: "Show quota and token usage" },
+	{ name: "models", description: "Discover the model catalog again" },
 	{ name: "update", description: "Install the latest signed runtime" },
 	{ name: "updates", description: "Configure runtime updates", options: ["automatic", "notify", "manual"] },
 	{ name: "logout", description: "Clear this Pi profile's Google login and ACP sessions" },

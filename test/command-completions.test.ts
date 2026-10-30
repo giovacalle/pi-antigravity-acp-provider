@@ -7,7 +7,7 @@ describe("Antigravity command argument completion", () => {
 	it("suggests canonical commands with descriptions, not redundant aliases", () => {
 		const items = completeAntigravityArguments("")!;
 		expect(items.map(({ value }) => value)).toEqual([
-			"setup", "doctor", "quota", "update", "updates", "logout", "permissions", "tool-activity",
+			"setup", "doctor", "quota", "models", "update", "updates", "logout", "permissions", "tool-activity",
 		]);
 		expect(items.every((item) => "description" in item && item.description)).toBe(true);
 	});
