@@ -136,7 +136,7 @@ Pi's system prompt is higher-trust configuration, but ACP v1 carries reconstruct
 ...
 ```
 
-This framing cannot provide cryptographic role separation. Avoid adding provider prose that grants capabilities or asks Gemini to ignore policies. Preserve Pi's current system prompt rather than independently crawling AGENTS files, which can duplicate or disagree with Pi.
+agy 1.4.3 and newer instead receive the instructions as the session system prompt through `_meta.antigravity.systemPrompt.append`, so the resource then carries only the prior conversation. This framing cannot provide cryptographic role separation. Avoid adding provider prose that grants capabilities or asks Gemini to ignore policies. Preserve Pi's current system prompt rather than independently crawling AGENTS files, which can duplicate or disagree with Pi.
 
 Tool outputs, other-provider messages, and repository files are untrusted. Mark them as data in reconstruction. Truncate safely and avoid embedding secrets from internal permission records. Because boundary labels are not a true system-role security barrier, mutating/execute actions still require permission and Gemini remains an unsandboxed local agent.
 
