@@ -19,8 +19,10 @@ const WARM_CONTINUATION =
 const LINE_BREAKS = /[\r\n\v\f\u0085\u2028\u2029]+/gu;
 /**
  * agy runs `/plan`, `/usage` and `/logout` typed at the start of a text block or after (Python) whitespace,
- * and `/logout` / `/usage` when all text blocks joined start with them. U+200B before the slash stops it,
- * and agy drops a leading U+200B before the model sees the text.
+ * and `/logout` / `/usage` when all text blocks joined start with them. U+200B before the slash stops it.
+ * agy 1.4.3 strips U+200B, leading or mid-line, after slash parsing and before the model and the transcript,
+ * so the marker never reaches the model or its tool arguments; mid-line `/usage` and `/logout` are not
+ * intercepted, but marking them is harmless.
  */
 const SLASH_COMMAND = /(^|[\s\x1c-\x1f\x85])\/(?=(?:plan|usage|logout)(?:[\s\x1c-\x1f\x85]|$))/giu;
 const LEADING_SPACE = /^[\s\x1c-\x1f\x85]*/u;
