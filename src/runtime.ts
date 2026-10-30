@@ -25,7 +25,7 @@ import {
 	type AntigravityAuthHealth,
 } from "./acp/antigravity.js";
 import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./acp/connection.js";
-import { AcpConnectionPool, type ConnectionLease, type OpenedConnection } from "./acp/connection-pool.js";
+import { AcpConnectionPool, waitUnlessAborted, type ConnectionLease, type OpenedConnection } from "./acp/connection-pool.js";
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
 import { quotaExhaustion } from "./acp/quota.js";
 import { AcpSessionStore } from "./acp/session-store.js";
@@ -289,14 +289,8 @@ export class AntigravityRuntime {
 			};
 			this.quotaInFlight = request;
 		}
-		const shared = this.quotaInFlight.snapshot;
-		if (!signal) return shared;
 		// One caller's abort must not cancel the request other callers share.
-		return new Promise((resolve, reject) => {
-			const onAbort = () => reject(abortError());
-			signal.addEventListener("abort", onAbort, { once: true });
-			shared.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-		});
+		return waitUnlessAborted(this.quotaInFlight.snapshot, signal);
 	}
 
 	// A separate short-lived process, never a user's warm session, so `/usage` cannot race user turns.
@@ -797,9 +791,10 @@ export class AntigravityRuntime {
 		} catch (error) {
 			binding.writer?.fail(error, isAbort(error));
 			if (isAbort(error) || binding.abortRequested) abortTurn(binding);
-			// A lost session may still run its turn inside agy, so it is never restored.
-			const lost = binding.connection.isSessionLost(binding.session.sessionId);
-			if (lost || !binding.connection.process.alive) await this.dropBinding(key, binding, lost);
+			// A lost session keeps its saved record; the next turn restores it on another process.
+			if (binding.connection.isSessionLost(binding.session.sessionId) || !binding.connection.process.alive) {
+				await this.dropBinding(key, binding);
+			}
 			throw error;
 		} finally {
 			if (onTurnAbort) options.signal?.removeEventListener("abort", onTurnAbort);
@@ -919,8 +914,10 @@ export class AntigravityRuntime {
 			onUpdate: (notification: SessionNotification) => this.consumeUpdate(binding, notification),
 			onPermission: (request: RequestPermissionRequest) => this.requestPermission(binding, request),
 		};
+		const saved = piSessionId ? this.sessionStore?.get(piSessionId) : undefined;
 		const lease = this.pool
-			? await this.pool.acquire(poolKey(apiKey), () => this.openShared(apiKey), signal)
+			? await this.pool.acquire(poolKey(apiKey), () => this.openShared(apiKey), signal,
+				(candidate) => saved !== undefined && candidate.isSessionLost(saved.acpSessionId))
 			: undefined;
 		const connection = lease?.connection ?? this.createConnection({ cwd, handlers });
 		try {
@@ -943,13 +940,14 @@ export class AntigravityRuntime {
 				mcpServer = await bridge.start();
 			}
 			const mcpServers = mcpServer ? [mcpServer] : [];
-			const saved = piSessionId ? this.sessionStore?.get(piSessionId) : undefined;
 			let session: AcpNewSessionResponse | undefined;
 			let restored = false;
 			const meta = sessionMeta(this.nativeTools, mcpServer?.name);
 			// Antigravity persists the builtin filter per session and keeps it on resume, so a session
 			// saved under another filter is replaced rather than restored.
 			if (saved?.cwd === cwd && saved.nativeTools === nativeToolsKey(this.nativeTools)) {
+				// Registered before restoring, so a load's history replay is not counted as unknown traffic.
+				const unregister = lease?.register(saved.acpSessionId, handlers);
 				if (initialize.agentCapabilities?.sessionCapabilities?.resume) {
 					try {
 						const resumed = await connection.resumeSession(saved.acpSessionId, cwd, mcpServers, signal, meta);
@@ -968,9 +966,12 @@ export class AntigravityRuntime {
 						this.sessionStore?.remove(saved.piSessionId);
 					}
 				}
+				if (!session) unregister?.();
 			}
-			session ??= await connection.newSession(cwd, signal, mcpServers, meta);
-			lease?.register(session.sessionId, handlers);
+			if (!session) {
+				session = await connection.newSession(cwd, signal, mcpServers, meta);
+				lease?.register(session.sessionId, handlers);
+			}
 			this.assertEpoch(epoch);
 			const mode = this.permissionMode;
 			if (!supportsMode(session, mode)) {
