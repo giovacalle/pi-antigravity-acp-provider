@@ -31,6 +31,25 @@ describe("prompt context", () => {
 		expect(warm.prompt).toEqual([{ type: "text", text: "new" }]);
 	});
 
+	it("keeps instructions out of the fresh resource when they travel in the session setup", () => {
+		const context: Context = {
+			systemPrompt: "Follow project rules",
+			messages: [
+				{ role: "user", content: "old", timestamp: 1 },
+				{ role: "user", content: "new", timestamp: 2 },
+			],
+		};
+		const withHistory = buildPromptParts(context, true, undefined, false);
+		const block = withHistory.prompt[0];
+		if (block?.type !== "resource" || !("text" in block.resource)) throw new Error("missing context");
+		expect(block.resource.text).toContain("# Prior conversation");
+		expect(block.resource.text).not.toContain("Follow project rules");
+		expect(withHistory.prompt.slice(1)).toEqual([{ type: "text", text: "---\n\n# Current Pi user request" }, { type: "text", text: "new" }]);
+
+		const withoutHistory = buildPromptParts({ ...context, messages: context.messages.slice(1) }, true, undefined, false);
+		expect(withoutHistory.prompt).toEqual([{ type: "text", text: "new" }]);
+	});
+
 	it("reconstructs trailing tools and sends the active request explicitly to a fresh session", () => {
 		const context: Context = {
 			messages: [
