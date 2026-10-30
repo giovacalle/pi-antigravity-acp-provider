@@ -33,6 +33,7 @@ import {
 } from "./acp/connection-pool.js";
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
 import { quotaExhaustion } from "./acp/quota.js";
+import { compareRuntimeVersions } from "./acp/runtime-manifest.js";
 import { AcpSessionStore } from "./acp/session-store.js";
 import { sessionModels, sessionModes, type AcpModelInfo, type AcpNewSessionResponse, type SessionState } from "./acp/session-state.js";
 import { parseUsageQuota, type AntigravityQuotaSnapshot } from "./acp/usage-quota.js";
@@ -95,6 +96,8 @@ interface Binding {
 	session: AcpNewSessionResponse;
 	mode: PermissionMode;
 	instructionsFingerprint: string | undefined;
+	/** The runtime takes Pi's instructions as its session system prompt rather than in the first prompt. */
+	instructionsInSetup: boolean;
 	needsReconstruction: boolean;
 	modelId: string;
 	messageCount: number;
@@ -239,8 +242,9 @@ export class AntigravityRuntime {
 
 	stream(model: AntigravityModel, context: Context, options: SimpleStreamOptions = {}): PiEventWriter {
 		const writer = new PiEventWriter(model);
-		// ACP has no mid-conversation system-message API. Replay Pi's prompt/tool
-		// deltas into a checkpoint; its fingerprint invalidates stale warm sessions.
+		// ACP has no mid-conversation system-message API. agy 1.4.3+ takes changed instructions
+		// through a resume of the saved session; other runtimes replay Pi's prompt/tool deltas
+		// into a checkpoint whose fingerprint invalidates stale warm sessions.
 		try {
 			const transcript = collapseSystemMessages(normalizeContext(context));
 			const resolvedContext: Context = {
@@ -628,8 +632,9 @@ export class AntigravityRuntime {
 		await this.modeChanges;
 		this.assertEpoch(epoch);
 		const tools = context.tools ?? [];
+		const instructions = currentSystemInstructions(context);
 		const acpModelId = resolveAcpModelId(model, options.reasoning);
-		let binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
+		let binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
 		// Keeps the idle sweep off a binding this turn is about to use.
 		this.touch(binding);
 		await this.modeChanges;
@@ -638,7 +643,7 @@ export class AntigravityRuntime {
 		if (binding.mode !== this.permissionMode || this.confirmedMode(binding) !== this.permissionMode ||
 			binding.toolFingerprint !== piToolFingerprint(tools)) {
 			await this.invalidateBinding(binding);
-			binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
+			binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
 		}
 
 		// A permission tool result resumes the still-running ACP prompt rather than
@@ -649,12 +654,12 @@ export class AntigravityRuntime {
 			if (!result) {
 				cancelPermission(binding);
 				await this.dropBinding(key, binding);
-				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
+				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
 			} else {
 				binding.writer = writer;
-				this.noteContinuationInstructions(binding, context);
+				this.noteContinuationInstructions(binding, instructions);
 				binding.pendingContextCount = context.messages.length;
-				binding.pendingContextFingerprint = messagesFingerprint(context.messages);
+				binding.pendingContextFingerprint = historyFingerprint(binding, context.messages);
 				binding.permission = undefined;
 				clearTimeout(pending.timer);
 				if (
@@ -679,12 +684,12 @@ export class AntigravityRuntime {
 			if (results.some((result) => result.message === undefined)) {
 				cancelPiTools(binding, "Pi continued without returning every requested tool result");
 				await this.dropBinding(key, binding);
-				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
+				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
 			} else {
 				binding.writer = writer;
-				this.noteContinuationInstructions(binding, context);
+				this.noteContinuationInstructions(binding, instructions);
 				binding.pendingContextCount = context.messages.length;
-				binding.pendingContextFingerprint = messagesFingerprint(context.messages);
+				binding.pendingContextFingerprint = historyFingerprint(binding, context.messages);
 				for (const { pending, message } of results) {
 					binding.pendingTools.delete(pending.invocation.id);
 					pending.resolve(toMcpToolResult(message as ToolResultMessage));
@@ -706,17 +711,22 @@ export class AntigravityRuntime {
 			await this.modeChanges;
 			this.assertEpoch(epoch);
 			// A queued caller may hold an obsolete binding after shutdown/mode changes.
-			binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
+			binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
+			if (binding.instructionsInSetup && binding.instructionsFingerprint !== instructionFingerprint(instructions)) {
+				// agy keeps the history and replaces the appended instructions on resume.
+				await this.dropBinding(key, binding, false);
+				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
+			}
 			if (
 				binding.needsReconstruction || binding.mode !== this.permissionMode ||
 				this.confirmedMode(binding) !== this.permissionMode ||
 				binding.toolFingerprint !== piToolFingerprint(tools) ||
 				context.messages.length < binding.messageCount ||
-				messagesFingerprint(context.messages.slice(0, binding.messageCount)) !==
+				historyFingerprint(binding, context.messages.slice(0, binding.messageCount)) !==
 					binding.historyFingerprint
 			) {
 				await this.dropBinding(key, binding, true);
-				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, options.signal);
+				binding = await this.getBinding(key, model, acpModelId, options.apiKey, writer, tools, instructions, options.signal);
 			}
 			binding.writer = writer;
 			if (binding.modelId !== acpModelId) {
@@ -742,7 +752,7 @@ export class AntigravityRuntime {
 				unseenStart += 1;
 			}
 			const parts = adaptPromptToCapabilities(
-				buildPromptParts(context, fresh, unseenStart),
+				buildPromptParts(context, fresh, unseenStart, !binding.instructionsInSetup),
 				binding.initialize,
 			);
 			await this.modeChanges;
@@ -751,10 +761,10 @@ export class AntigravityRuntime {
 				await this.invalidateBinding(binding);
 				throw new AntigravityAcpError("protocol", "Permission mode changed before prompting; retry the turn");
 			}
-			binding.instructionsFingerprint = instructionFingerprint(context);
+			binding.instructionsFingerprint = instructionFingerprint(instructions);
 			binding.needsReconstruction = false;
 			binding.pendingContextCount = context.messages.length;
-			binding.pendingContextFingerprint = messagesFingerprint(context.messages);
+			binding.pendingContextFingerprint = historyFingerprint(binding, context.messages);
 			binding.contextUsed = undefined;
 			binding.inferences = 0;
 			binding.turnCompletion = new Promise<void>((resolve) => {
@@ -879,12 +889,13 @@ export class AntigravityRuntime {
 		apiKey: string | undefined,
 		writer: PiEventWriter,
 		tools: Context["tools"],
+		instructions: string,
 		signal?: AbortSignal,
 	): Promise<Binding> {
 		this.assertActive();
 		const existing = this.bindings.get(key);
 		if (existing) return existing;
-		const created = this.createBinding(key, model, acpModelId, apiKey, writer, tools ?? [], signal).catch((error) => {
+		const created = this.createBinding(key, model, acpModelId, apiKey, writer, tools ?? [], instructions, signal).catch((error) => {
 			if (this.bindings.get(key) === created) this.bindings.delete(key);
 			throw error;
 		});
@@ -899,6 +910,7 @@ export class AntigravityRuntime {
 		apiKey: string | undefined,
 		writer: PiEventWriter,
 		tools: NonNullable<Context["tools"]>,
+		instructions: string,
 		signal?: AbortSignal,
 	): Promise<Binding> {
 		const epoch = this.bindingEpoch;
@@ -909,7 +921,7 @@ export class AntigravityRuntime {
 		try {
 			await eviction;
 			this.assertEpoch(epoch);
-			return await this.startBinding(key, model, acpModelId, apiKey, writer, tools, slot, signal);
+			return await this.startBinding(key, model, acpModelId, apiKey, writer, tools, instructions, slot, signal);
 		} finally {
 			this.startingBindings.delete(slot);
 		}
@@ -922,6 +934,7 @@ export class AntigravityRuntime {
 		apiKey: string | undefined,
 		writer: PiEventWriter,
 		tools: NonNullable<Context["tools"]>,
+		instructions: string,
 		slot: symbol,
 		signal?: AbortSignal,
 	): Promise<Binding> {
@@ -962,7 +975,8 @@ export class AntigravityRuntime {
 			const mcpServers = mcpServer ? [mcpServer] : [];
 			let session: AcpNewSessionResponse | undefined;
 			let restored = false;
-			const meta = sessionMeta(this.nativeTools, mcpServer?.name);
+			const instructionsInSetup = acceptsSystemPrompt(initialize);
+			const meta = sessionMeta(this.nativeTools, mcpServer?.name, instructionsInSetup ? instructions : undefined);
 			// Antigravity persists the builtin filter per session and keeps it on resume, so a session
 			// saved under another filter is replaced rather than restored.
 			if (saved?.cwd === cwd && saved.nativeTools === nativeToolsKey(this.nativeTools)) {
@@ -1014,7 +1028,8 @@ export class AntigravityRuntime {
 				initialize,
 				session,
 				mode,
-				instructionsFingerprint: undefined,
+				instructionsFingerprint: instructionsInSetup ? instructionFingerprint(instructions) : undefined,
+				instructionsInSetup,
 				needsReconstruction: false,
 				modelId: acpModelId,
 				messageCount: restored && saved ? saved.messageCount : 0,
@@ -1197,8 +1212,10 @@ export class AntigravityRuntime {
 		return sessionModes(binding.connection.getSessionState(binding.session.sessionId))?.currentModeId;
 	}
 
-	private noteContinuationInstructions(binding: Binding, context: Context): void {
-		if (binding.instructionsFingerprint !== instructionFingerprint(context)) {
+	private noteContinuationInstructions(binding: Binding, instructions: string): void {
+		// The next turn resumes the saved session with the new instructions in its setup.
+		if (binding.instructionsInSetup) return;
+		if (binding.instructionsFingerprint !== instructionFingerprint(instructions)) {
 			// ACP has no system-update RPC. Finish this immutable prompt, then rebuild;
 			// do not persist a fingerprint claiming the new instructions reached ACP.
 			binding.needsReconstruction = true;
@@ -1270,11 +1287,23 @@ function hasUsableLocalAuth(health: AntigravityAuthHealth): boolean {
 	return health.status === "api-key-env" || health.status === "oauth-refreshable";
 }
 
-// Antigravity keeps neither eager servers nor the output limit across resume, so both go on every setup.
-function sessionMeta(nativeTools: NativeTools, eagerServer: string | undefined): Record<string, unknown> | undefined {
+/** agy 1.4.3 appends `_meta.antigravity.systemPrompt.append` to its own system prompt; older runtimes were not verified. */
+function acceptsSystemPrompt(initialize: InitializeResponse): boolean {
+	const agent = initialize.agentInfo;
+	if (agent?.name !== "antigravity-acp") return false;
+	try {
+		return compareRuntimeVersions(agent.version.replace(/^agy_acp_server_/u, ""), "1.4.3") >= 0;
+	} catch {
+		return false;
+	}
+}
+
+// Antigravity keeps neither eager servers, the output limit nor the system prompt across resume, so all go on every setup.
+function sessionMeta(nativeTools: NativeTools, eagerServer: string | undefined, append: string | undefined): Record<string, unknown> | undefined {
 	const antigravity = {
 		...(nativeTools === "all" ? {} : { enabledTools: nativeTools === "none" ? [] : nativeTools }),
 		...(eagerServer ? { eagerMcpServers: [eagerServer], mcpMaxOutputBytes: MCP_MAX_OUTPUT_BYTES } : {}),
+		...(append ? { systemPrompt: { append } } : {}),
 	};
 	return Object.keys(antigravity).length > 0 ? { antigravity } : undefined;
 }
@@ -1335,6 +1364,11 @@ function findPermissionResult(context: Context, requestId: string): PermissionTo
 		};
 	}
 	return undefined;
+}
+
+// With instructions in the session setup, the collapsed system head is not part of the history agy holds.
+function historyFingerprint(binding: Binding, messages: Context["messages"]): string {
+	return messagesFingerprint(binding.instructionsInSetup ? messages.filter((message) => message.role !== "system") : messages);
 }
 
 function messagesFingerprint(messages: Context["messages"]): string {
@@ -1421,8 +1455,8 @@ function cancelPermission(binding: Binding): void {
 	binding.permission = undefined;
 }
 
-function instructionFingerprint(context: Context): string {
-	return createHash("sha256").update(currentSystemInstructions(context)).digest("hex");
+function instructionFingerprint(instructions: string): string {
+	return createHash("sha256").update(instructions).digest("hex");
 }
 
 function abortTurn(binding: Binding): void {

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AntigravityAcpConnection } from "../src/acp/connection.js";
 import { AcpSessionStore } from "../src/acp/session-store.js";
 import { AntigravityRuntime, PERMISSION_TOOL_NAME, PERMISSION_RESULT_KIND } from "../src/runtime.js";
@@ -33,7 +33,7 @@ function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSess
 		connections.push(connection); return connection;
 	}, mode, store, limits);
 	runtimes.push(runtime);
-	const entries = () => fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method: string; prompt?: unknown; mode?: string; _meta?: unknown });
+	const entries = () => fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { method: string; prompt?: unknown; mode?: string; _meta?: unknown; sessionId?: string });
 	return { root, runtime, connections, entries };
 }
 async function drain(writer: PiEventWriter) { for await (const _event of writer.stream) void _event; return writer.message; }
@@ -663,6 +663,86 @@ describe("instruction updates during continuations", () => {
 		const message = await drain(runtime.stream(model, { systemPrompt: "x".repeat(270000), messages: [user("hello")] }));
 		expect(message.errorMessage).toContain("system instructions exceed");
 		expect(connections).toHaveLength(0);
+	});
+});
+
+describe("instructions in the session setup", () => {
+	beforeEach(() => vi.stubEnv("FAKE_AGENT_VERSION", "1.4.3"));
+	afterEach(() => vi.unstubAllEnvs());
+	const appendOf = (entry: { _meta?: unknown } | undefined) =>
+		(entry?._meta as { antigravity?: { systemPrompt?: { append?: string } } } | undefined)?.antigravity?.systemPrompt?.append;
+	const setupMethods = (entries: Array<{ method: string }>) => entries.map((entry) => entry.method)
+		.filter((method) => ["session/new", "session/resume", "session/load", "session/prompt"].includes(method));
+
+	it("sends the instructions on session/new and keeps them out of the prompt", async () => {
+		const { runtime, entries } = setup();
+		expect((await drain(runtime.stream(model, { systemPrompt: "RULES", messages: [user("hello")] }, { sessionId: "append", apiKey: "test-key" }))).stopReason).toBe("stop");
+		expect(entries().find((entry) => entry.method === "session/new")?._meta).toEqual({ antigravity: { systemPrompt: { append: "RULES" } } });
+		expect(entries().find((entry) => entry.method === "session/prompt")?.prompt).toEqual([{ type: "text", text: "hello" }]);
+	});
+
+	it("resends the instructions when resuming a saved session", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const first = setup(undefined, "yolo", store);
+		const message = await drain(first.runtime.stream(model, { systemPrompt: "RULES", messages: [user("hello")] }, { sessionId: "append", apiKey: "test-key" }));
+		await first.runtime.close();
+		const sessionId = store.get("append")?.acpSessionId;
+		const second = setup(undefined, "yolo", store);
+		const next = await drain(second.runtime.stream(model, { systemPrompt: "RULES", messages: [user("hello"), message, user("next", 2)] }, { sessionId: "append", apiKey: "test-key" }));
+		expect(next.stopReason).toBe("stop");
+		const resume = second.entries().find((entry) => entry.method === "session/resume");
+		expect(resume?.sessionId).toBe(sessionId);
+		expect(appendOf(resume)).toBe("RULES");
+		expect(second.entries().some((entry) => entry.method === "session/new")).toBe(false);
+	});
+
+	it("resumes the same session with changed instructions instead of rebuilding", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const { runtime, entries } = setup(undefined, "yolo", store);
+		const firstContext = normalizeContext({ systemPrompt: "ORIGINAL", messages: [user("hello")] });
+		const reply = await drain(runtime.stream(model, firstContext, { sessionId: "change", apiKey: "test-key" }));
+		const sessionId = store.get("change")?.acpSessionId;
+		const next = await drain(runtime.stream(model, normalizeContext({ messages: [...firstContext.messages, reply,
+			{ role: "system", content: "UPDATED", timestamp: 2 }, user("next", 3)] }), { sessionId: "change", apiKey: "test-key" }));
+		expect(next.stopReason).toBe("stop");
+		expect(setupMethods(entries())).toEqual(["session/new", "session/prompt", "session/resume", "session/prompt"]);
+		const resume = entries().find((entry) => entry.method === "session/resume");
+		expect(resume?.sessionId).toBe(sessionId);
+		expect(appendOf(resume)).toContain("UPDATED");
+		expect(entries().filter((entry) => entry.method === "session/prompt").at(-1)?.prompt).toEqual([{ type: "text", text: "next" }]);
+	});
+
+	it("applies instructions changed during a tool continuation on the next turn", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const { runtime, entries } = setup(undefined, "yolo", store);
+		const firstContext = normalizeContext({ systemPrompt: "ORIGINAL_RULE", tools, messages: [user("use bridge")] });
+		const first = await drain(runtime.stream(model, firstContext, { sessionId: "rules", apiKey: "test-key" }));
+		const call = first.content.find((block) => block.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("missing call");
+		const context = normalizeContext({ messages: [...firstContext.messages, first,
+			{ role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "completed" }], isError: false, timestamp: 2 },
+			{ role: "system", content: "UPDATED_RULE", timestamp: 3 },
+		] });
+		const second = await drain(runtime.stream(model, context, { sessionId: "rules", apiKey: "test-key" }));
+		expect(second.stopReason).toBe("stop");
+		expect(store.get("rules")).toBeDefined();
+		const third = await drain(runtime.stream(model, normalizeContext({ messages: [...context.messages, second, user("next", 4)] }), { sessionId: "rules", apiKey: "test-key" }));
+		expect(third.stopReason).toBe("stop");
+		const resume = entries().find((entry) => entry.method === "session/resume");
+		expect(appendOf(resume)).toContain("UPDATED_RULE");
+		expect(entries().filter((entry) => entry.method === "session/new")).toHaveLength(1);
+		expect(entries().filter((entry) => entry.method === "session/prompt").at(-1)?.prompt).toEqual([{ type: "text", text: "next" }]);
+	});
+
+	it("keeps the instructions in the prompt for an older runtime", async () => {
+		vi.stubEnv("FAKE_AGENT_VERSION", "1.4.1");
+		const { runtime, entries } = setup();
+		await drain(runtime.stream(model, { systemPrompt: "RULES", messages: [user("hello")] }, { sessionId: "legacy", apiKey: "test-key" }));
+		expect("_meta" in entries().find((entry) => entry.method === "session/new")!).toBe(false);
+		expect(JSON.stringify(entries().find((entry) => entry.method === "session/prompt")?.prompt)).toContain("RULES");
 	});
 });
 

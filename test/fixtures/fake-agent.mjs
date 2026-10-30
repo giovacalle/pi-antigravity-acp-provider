@@ -51,7 +51,7 @@ for await (const line of rl) {
 	}
 	const { id, method, params } = message;
 	if (process.env.FAKE_AGENT_LOG_FILE && method) fs.appendFileSync(process.env.FAKE_AGENT_LOG_FILE,
-		JSON.stringify({ method, ...(method === "session/prompt" ? { prompt: params.prompt, mode: state(params.sessionId).mode } : {}), ...(method === "session/set_mode" ? { modeId: params.modeId } : {}), ...(method === "session/new" ? { cwd: params.cwd } : {}), ...(["session/new", "session/load", "session/resume"].includes(method) && params && "_meta" in params ? { _meta: params._meta } : {}) }) + "\n");
+		JSON.stringify({ method, ...(method === "session/prompt" ? { prompt: params.prompt, mode: state(params.sessionId).mode } : {}), ...(method === "session/set_mode" ? { modeId: params.modeId } : {}), ...(method === "session/new" ? { cwd: params.cwd } : {}), ...(method === "session/load" || method === "session/resume" ? { sessionId: params.sessionId } : {}), ...(["session/new", "session/load", "session/resume"].includes(method) && params && "_meta" in params ? { _meta: params._meta } : {}) }) + "\n");
 	if (typeof id === "string" && id.startsWith("permission-") && method === undefined) {
 		const sessionId = id.slice("permission-".length);
 		const session = state(sessionId);
@@ -81,7 +81,9 @@ for await (const line of rl) {
 			id,
 			result: {
 				protocolVersion: 1,
-				agentInfo: { name: "fake-gemini", version: "1.0.0" },
+				agentInfo: process.env.FAKE_AGENT_VERSION
+					? { name: "antigravity-acp", version: process.env.FAKE_AGENT_VERSION }
+					: { name: "fake-gemini", version: "1.0.0" },
 				authMethods: [
 					{ id: "oauth-personal", name: "Log in with Google" },
 					{ id: "api", name: "Gemini API key", _meta: { "api-key": { provider: "google" } } },
