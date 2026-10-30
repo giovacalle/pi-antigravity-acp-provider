@@ -34,7 +34,7 @@ function tmp(): string {
 
 describe("AcpConnectionPool", () => {
 	it("shares one open between concurrent acquires of a key", async () => {
-		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4 });
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 6, idleTtlMs: 60_000 });
 		const { open, opened } = opener();
 
 		const leases = await Promise.all([pool.acquire("managed", open), pool.acquire("managed", open), pool.acquire("key:other", open)]);
@@ -45,7 +45,7 @@ describe("AcpConnectionPool", () => {
 	});
 
 	it("drops and counts updates and permission requests for a session no lease registered", async () => {
-		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4 });
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 6, idleTtlMs: 60_000 });
 		const lease = await pool.acquire("managed", opener().open);
 		const owned = await lease.connection.newSession(tmp());
 		const stray = await lease.connection.newSession(tmp());
@@ -64,7 +64,7 @@ describe("AcpConnectionPool", () => {
 	});
 
 	it("rejects only an aborted waiter and keeps the shared open", async () => {
-		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4 });
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 6, idleTtlMs: 60_000 });
 		const { open, opened } = opener();
 		const controller = new AbortController();
 		const aborted = pool.acquire("managed", open, controller.signal);
@@ -78,7 +78,7 @@ describe("AcpConnectionPool", () => {
 	});
 
 	it("rejects every waiter when the open fails and opens afresh next time", async () => {
-		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4 });
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 6, idleTtlMs: 60_000 });
 		const { open, opened } = opener();
 		const failing = () => Promise.reject(new Error("spawn failed"));
 
@@ -90,7 +90,7 @@ describe("AcpConnectionPool", () => {
 	});
 
 	it("opens a new process past the session limit or after the shared one exits", async () => {
-		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 1 });
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 1, recycleAfterSessions: 6, idleTtlMs: 60_000 });
 		const { open, opened } = opener();
 		const first = await pool.acquire("managed", open);
 		await pool.acquire("managed", open);
@@ -103,5 +103,53 @@ describe("AcpConnectionPool", () => {
 		await first.connection.close();
 		await pool.acquire("managed", open);
 		expect(opened).toHaveLength(3);
+	});
+
+	it("drains a process after the recycle threshold and closes it when its last lease leaves", async () => {
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 2, idleTtlMs: 60_000 });
+		const { open, opened } = opener();
+		const leases = [];
+		for (let i = 0; i < 3; i += 1) {
+			const lease = await pool.acquire("managed", open);
+			await lease.connection.newSession(tmp());
+			leases.push(lease);
+		}
+		expect(opened).toHaveLength(2);
+		expect(leases[1]!.connection).toBe(leases[0]!.connection);
+
+		leases[0]!.release();
+		expect(opened[0]!.process.alive).toBe(true);
+		leases[1]!.release();
+
+		await opened[0]!.process.exited;
+		expect(opened[1]!.process.alive).toBe(true);
+	});
+
+	it("closes an empty process after the idle TTL unless it is acquired again", async () => {
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 6, idleTtlMs: 200 });
+		const { open, opened } = opener();
+		const first = await pool.acquire("managed", open);
+		first.release();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const again = await pool.acquire("managed", open);
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect(again.connection.process.alive).toBe(true);
+
+		const started = Date.now();
+		again.release();
+
+		await opened[0]!.process.exited;
+		expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+		expect(opened).toHaveLength(1);
+	});
+
+	it("closes an empty process at once when the idle TTL is disabled", async () => {
+		const pool = new AcpConnectionPool({ maxSessionsPerProcess: 4, recycleAfterSessions: 6, idleTtlMs: 0 });
+		const { open, opened } = opener();
+		(await pool.acquire("managed", open)).release();
+
+		await opened[0]!.process.exited;
+		await pool.acquire("managed", open);
+		expect(opened).toHaveLength(2);
 	});
 });
