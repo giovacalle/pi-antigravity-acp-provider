@@ -128,9 +128,11 @@ export function createAntigravityProvider(runtime = new AntigravityRuntime()): A
 			let discovered;
 			try {
 				discovered = projectModels(await runtime.discoverModels(key, context.signal));
-			} catch {
+			} catch (error) {
 				// Startup refresh must not hide the restored or offline catalog when
-				// authentication is absent, expired, or temporarily unavailable.
+				// authentication is absent, expired, or temporarily unavailable. A
+				// forced refresh reports the failure; the catalog stays in place.
+				if (context.force) throw error;
 				return;
 			}
 			if (discovered.length === 0) return;
