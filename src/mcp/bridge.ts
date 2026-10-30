@@ -38,6 +38,8 @@ export interface PiToolInvocation {
 export interface PiMcpBridgeOptions {
 	tools: readonly Tool[];
 	onCall: (invocation: PiToolInvocation) => Promise<CallToolResult>;
+	/** Defaults to `pi-bridge`. */
+	serverName?: string;
 }
 
 export interface ToolOmission {
@@ -110,7 +112,7 @@ export class PiMcpBridge {
 		if (!this.url) throw new AntigravityAcpError("spawn", "MCP bridge is not listening");
 		return {
 			type: "http",
-			name: "pi-bridge",
+			name: this.options.serverName ?? "pi-bridge",
 			url: this.url,
 			headers: [{ name: "Authorization", value: `Bearer ${this.token}` }],
 		};

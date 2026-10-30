@@ -26,6 +26,8 @@ export function acquireSharedRuntime(connectionFactory?: AntigravityConnectionFa
 			idleTtlMs: config.idleTtlMs,
 			maxLiveSessions: config.maxLiveSessions,
 			nativeTools: config.nativeTools,
+			sharedProcess: config.sharedProcess,
+			maxSessionsPerProcess: config.maxSessionsPerProcess,
 		});
 		shared = { runtime, provider: createAntigravityProvider(runtime).provider, refs: 0, version: PACKAGE_VERSION };
 		slots[KEY] = shared;
