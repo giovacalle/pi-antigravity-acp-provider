@@ -525,12 +525,15 @@ describe("shared process", () => {
 		expect(text(b)).toBe(counted("beta", 3));
 	});
 
-	it("abandons an aborted session that ignores cancel without disturbing the other", async () => {
-		const { runtime, connections, entries } = setup(undefined, "yolo", undefined, { sharedProcess: true });
+	it("abandons an aborted session that ignores cancel without disturbing the other, then resumes it on another process", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const { runtime, connections, entries } = setup(undefined, "yolo", store, { sharedProcess: true });
+		const first = await turn(runtime, [user("hello")], "A");
 		const controller = new AbortController();
-		const aborted = drain(runtime.stream(model, { messages: [user("ignore cancel")] }, { sessionId: "A", apiKey: "test-key", signal: controller.signal }));
+		const aborted = drain(runtime.stream(model, { messages: [user("hello"), first, user("ignore cancel", 2)] }, { sessionId: "A", apiKey: "test-key", signal: controller.signal }));
 		const other = turn(runtime, [user("count 60 beta")], "B");
-		await vi.waitFor(() => expect(entries().filter((entry) => entry.method === "session/prompt")).toHaveLength(2));
+		await vi.waitFor(() => expect(entries().filter((entry) => entry.method === "session/prompt")).toHaveLength(3));
 
 		controller.abort();
 
@@ -540,10 +543,12 @@ describe("shared process", () => {
 		expect(text(b)).toBe(counted("beta", 60));
 		expect(connections).toHaveLength(1);
 		expect(connections[0]!.process.alive).toBe(true);
-		const next = await turn(runtime, [user("hello")], "A");
+		const next = await turn(runtime, [user("hello"), first, user("next", 3)], "A");
 		expect(next.stopReason).toBe("stop");
-		expect(connections).toHaveLength(1);
-		expect(entries().filter((entry) => entry.method === "session/new")).toHaveLength(3);
+		expect(connections).toHaveLength(2);
+		expect(connections[0]!.process.alive).toBe(true);
+		expect(entries().filter((entry) => entry.method === "session/new")).toHaveLength(2);
+		expect(entries().filter((entry) => entry.method === "session/resume")).toHaveLength(1);
 	});
 
 	it("gives each session on a shared process its own Pi bridge name", async () => {

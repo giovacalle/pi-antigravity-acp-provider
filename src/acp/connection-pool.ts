@@ -9,8 +9,8 @@ export interface OpenedConnection {
 }
 
 export interface ConnectionLease extends OpenedConnection {
-	/** Route this session's updates and permission requests to `handlers`. */
-	register(sessionId: string, handlers: AntigravityConnectionHandlers): void;
+	/** Route this session's updates and permission requests to `handlers`; returns the unregister call. */
+	register(sessionId: string, handlers: AntigravityConnectionHandlers): () => void;
 	/** Idempotent. Never closes the process, which other leases may share. */
 	release(): void;
 }
@@ -25,8 +25,9 @@ interface PoolEntry {
 
 /** Shares one initialized ACP connection per pool key between up to `maxSessionsPerProcess` sessions. */
 export class AcpConnectionPool {
-	/** Updates for a session no lease registered; they are dropped, never delivered to another session. */
-	unknownSessionUpdates = 0;
+	/** Updates and permission requests for a session no lease registered; they are dropped or
+	 * cancelled, never delivered to another session. */
+	unknownSessionMessages = 0;
 	private readonly maxSessionsPerProcess: number;
 	private entries: PoolEntry[] = [];
 
@@ -34,11 +35,17 @@ export class AcpConnectionPool {
 		this.maxSessionsPerProcess = options.maxSessionsPerProcess;
 	}
 
-	async acquire(key: string, open: () => Promise<OpenedConnection>, signal?: AbortSignal): Promise<ConnectionLease> {
+	/** `avoid` skips processes the caller cannot use, such as one that abandoned the session it restores. */
+	async acquire(
+		key: string,
+		open: () => Promise<OpenedConnection>,
+		signal?: AbortSignal,
+		avoid?: (connection: AntigravityAcpConnection) => boolean,
+	): Promise<ConnectionLease> {
 		if (signal?.aborted) throw abortError();
 		// Reserved synchronously so concurrent first acquires share one open().
 		const entry = this.entries.find((candidate) => candidate.key === key && candidate.leases < this.maxSessionsPerProcess &&
-			(!candidate.connection || candidate.connection.process.alive)) ?? this.open(key, open);
+			(!candidate.connection || (candidate.connection.process.alive && !avoid?.(candidate.connection)))) ?? this.open(key, open);
 		entry.leases += 1;
 		let opened: OpenedConnection;
 		try {
@@ -48,21 +55,25 @@ export class AcpConnectionPool {
 			throw error;
 		}
 		const registered = new Map<string, AntigravityConnectionHandlers>();
+		const unregister = (sessionId: string) => {
+			const handlers = registered.get(sessionId);
+			registered.delete(sessionId);
+			if (handlers && entry.handlers.get(sessionId) === handlers) entry.handlers.delete(sessionId);
+		};
 		let released = false;
 		return {
 			...opened,
 			register: (sessionId, handlers) => {
-				if (released) return;
+				if (released) return () => undefined;
 				registered.set(sessionId, handlers);
 				entry.handlers.set(sessionId, handlers);
+				return () => unregister(sessionId);
 			},
 			release: () => {
 				if (released) return;
 				released = true;
 				entry.leases -= 1;
-				for (const [sessionId, handlers] of registered) {
-					if (entry.handlers.get(sessionId) === handlers) entry.handlers.delete(sessionId);
-				}
+				for (const sessionId of [...registered.keys()]) unregister(sessionId);
 			},
 		};
 	}
@@ -80,10 +91,14 @@ export class AcpConnectionPool {
 				onUpdate: (notification) => {
 					const handlers = entry.handlers.get(notification.sessionId);
 					if (handlers) return handlers.onUpdate?.(notification);
-					this.unknownSessionUpdates += 1;
+					this.unknownSessionMessages += 1;
 				},
-				onPermission: (request) => entry.handlers.get(request.sessionId)?.onPermission?.(request) ??
-					Promise.resolve({ outcome: { outcome: "cancelled" } }),
+				onPermission: (request) => {
+					const handlers = entry.handlers.get(request.sessionId);
+					if (handlers?.onPermission) return handlers.onPermission(request);
+					if (!handlers) this.unknownSessionMessages += 1;
+					return Promise.resolve({ outcome: { outcome: "cancelled" } });
+				},
 			});
 			void opened.connection.process.exited.then(remove, remove);
 			return opened;
@@ -97,8 +112,8 @@ export class AcpConnectionPool {
 	}
 }
 
-// One caller's abort must not cancel an open that other callers share.
-function waitUnlessAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+/** Rejects this caller on abort without cancelling `promise`, which other callers may share. */
+export function waitUnlessAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 	if (!signal) return promise;
 	return new Promise((resolve, reject) => {
 		const onAbort = () => reject(abortError());
