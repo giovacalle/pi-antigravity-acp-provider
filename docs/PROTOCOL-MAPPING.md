@@ -305,9 +305,9 @@ Pi exposes TypeBox/JSON-schema tool definitions, while Gemini's function declara
 
 Projection rules:
 
-1. Project a conservative JSON-schema subset; reject references and other unsupported keywords, including when nested, rather than dropping their constraints.
+1. Project a conservative JSON-schema subset; inline local `$ref` definitions from the root `$defs`/`definitions` (including TypeBox `Cyclic` bare-name references); reject recursive or remote references and other unsupported keywords, including when nested, rather than dropping their constraints.
 2. Preserve object properties, descriptions, required lists, scalar `enum`/`const` values (including false, zero and null), primitive/array/object shapes, and supported numeric/string/collection constraints. Add a singleton enum alongside a const for consumers which ignore const.
-3. Preserve supported `additionalProperties` constraints. Keep empty/typeless nested schemas as supplied; never infer a contradictory type or silently widen a constrained schema.
+3. Preserve supported `additionalProperties` constraints, and project a single catch-all `patternProperties` (TypeBox string-keyed `Record`) without sibling `properties`/`additionalProperties` as `additionalProperties`. Keep empty/typeless nested schemas as supplied; never infer a contradictory type or silently widen a constrained schema.
 4. Reject executable/custom validators, proxies, accessors, unsafe property names, malformed keyword values and cycles. Bound schema depth to 16, traversal work to 100,000 visits/keys/elements, and projected JSON to 64 KiB per tool. Drop non-scalar annotation defaults without traversing them.
 5. Omit rejected tools from MCP `tools/list`, record tool name plus a stable reason in diagnostics, and warn once in UI. Never let one marketplace schema fail the whole Antigravity session.
 6. Validate MCP call arguments again against the original Pi schema before emitting the Pi tool call; the projected model schema is not the authorization boundary.
