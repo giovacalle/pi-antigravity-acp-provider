@@ -146,4 +146,14 @@ describe("extension entry point", () => {
 
 		expect(connections.every((connection) => !connection.process.alive)).toBe(true);
 	});
+
+	it("reports process token totals without counting reasoning twice", async () => {
+		const { pi, ctx } = await load("parent");
+		await stream([user("usage single")], "parent");
+		await pi.commands.get("antigravity-acp")!.handler("quota", ctx as never);
+		// Thought tokens are already part of output, so tokens= is input + output + cacheRead + cacheWrite.
+		expect(ctx.ui.notify.mock.calls.at(-1)![0]).toContain(
+			"Usage this process: turns=1 tokens=1200 input=600 output=200 reasoning=50 cacheRead=400",
+		);
+	});
 });

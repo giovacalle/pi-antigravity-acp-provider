@@ -228,6 +228,14 @@ describe("quota exhaustion", () => {
 		expect(message.errorMessage).toContain("Resets at 2026-10-02T14:00:00.000Z.");
 	});
 
+	it("ends without a reset clause when Antigravity gives none", async () => {
+		const { runtime } = quotaSetup();
+		const message = await turn(runtime, [user("no reset")], "quota");
+		expect(message.stopReason).toBe("error");
+		expect(message.errorMessage).toMatch(/^Antigravity quota exceeded for .+\.$/u);
+		expect(message.errorMessage).not.toContain("Resets at");
+	});
+
 	it("treats a refusal carrying the quota message as an error", async () => {
 		const { runtime } = quotaSetup();
 		const message = await turn(runtime, [user("refusal")], "quota");
