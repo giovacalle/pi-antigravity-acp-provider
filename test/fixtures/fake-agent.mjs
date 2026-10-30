@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import readline from "node:readline";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -20,6 +21,15 @@ let permissionPromptId;
 let hangingPromptId;
 let bridgePromptId;
 let mcpServer;
+const sessionCwds = new Map();
+// agy 1.4.x writes this guide into the session cwd on setup and again at each
+// prompt when it is missing.
+const writeSystemSkill = (cwd) => {
+	if (process.env.FAKE_AGENT_SYSTEM_SKILL !== "1" || !cwd) return;
+	const dir = path.join(cwd, "skills", "system", "run-workflow");
+	fs.mkdirSync(dir, { recursive: true });
+	if (!fs.existsSync(path.join(dir, "SKILL.md"))) fs.writeFileSync(path.join(dir, "SKILL.md"), "fake system skill\n");
+};
 
 for await (const line of rl) {
 	if (!line.trim()) continue;
@@ -131,6 +141,8 @@ for await (const line of rl) {
 			continue;
 		}
 		mcpServer = params.mcpServers?.find((server) => server.type === "http");
+		sessionCwds.set("fake-session", params.cwd);
+		writeSystemSkill(params.cwd);
 		send({
 			jsonrpc: "2.0",
 			id,
@@ -147,6 +159,8 @@ for await (const line of rl) {
 			},
 		});
 	} else if (method === "session/resume" || method === "session/load") {
+		sessionCwds.set(params.sessionId, params.cwd);
+		writeSystemSkill(params.cwd);
 		send({
 			jsonrpc: "2.0",
 			id,
@@ -185,6 +199,7 @@ for await (const line of rl) {
 		mode = params.modeId;
 		send({ jsonrpc: "2.0", id, result: {} });
 	} else if (method === "session/prompt") {
+		writeSystemSkill(sessionCwds.get(params.sessionId));
 		const text = params.prompt.filter((block) => block.type === "text").map((block) => block.text).join("\n");
 		// agy runs these slash commands itself instead of prompting the model.
 		const joined = params.prompt.filter((block) => block.type === "text").map((block) => block.text).join("").trim();

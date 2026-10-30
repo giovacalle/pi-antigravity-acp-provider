@@ -271,3 +271,73 @@ describe("AntigravityAcpConnection", () => {
 		expect(connection.process.alive).toBe(false);
 	});
 });
+
+describe("agy system skills", () => {
+	const skill = path.join("skills", "system", "run-workflow", "SKILL.md");
+	const withAgent = async (
+		prepare: (cwd: string) => void,
+		run: (connection: AntigravityAcpConnection, cwd: string) => Promise<void>,
+		options: { promptIdleTimeoutMs?: number } = {},
+	) => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "acp-system-skills-"));
+		prepare(cwd);
+		const connection = new AntigravityAcpConnection({
+			cwd, command: process.execPath, args: [fakeAgent],
+			env: { ...process.env, FAKE_AGENT_SYSTEM_SKILL: "1" }, ...options,
+		});
+		try {
+			await run(connection, cwd);
+		} finally {
+			await connection.close();
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	};
+	const hello = (connection: AntigravityAcpConnection, sessionId: string) =>
+		connection.prompt({ sessionId, prompt: [{ type: "text", text: "hello" }] });
+
+	it("removes the tree agy writes into a cwd that had none", async () => {
+		await withAgent(() => undefined, async (connection, cwd) => {
+			const session = await connection.newSession(cwd);
+			expect(fs.existsSync(path.join(cwd, "skills"))).toBe(false);
+			await hello(connection, session.sessionId);
+			expect(fs.existsSync(path.join(cwd, "skills"))).toBe(false);
+			await connection.resumeSession(session.sessionId, cwd);
+			expect(fs.existsSync(path.join(cwd, "skills"))).toBe(false);
+			await connection.loadSession(session.sessionId, cwd);
+			expect(fs.existsSync(path.join(cwd, "skills"))).toBe(false);
+		});
+	});
+
+	it("removes the tree after a failed turn", async () => {
+		await withAgent(() => undefined, async (connection, cwd) => {
+			const session = await connection.newSession(cwd);
+			await expect(connection.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "hang" }] }))
+				.rejects.toThrow("no progress for 100ms");
+			expect(fs.existsSync(path.join(cwd, "skills"))).toBe(false);
+		}, { promptIdleTimeoutMs: 100 });
+	});
+
+	it("keeps a user's skills directory and its files", async () => {
+		await withAgent((cwd) => {
+			fs.mkdirSync(path.join(cwd, "skills"));
+			fs.writeFileSync(path.join(cwd, "skills", "user.md"), "user\n");
+		}, async (connection, cwd) => {
+			const session = await connection.newSession(cwd);
+			await hello(connection, session.sessionId);
+			expect(fs.readdirSync(path.join(cwd, "skills"))).toEqual(["user.md"]);
+			expect(fs.readFileSync(path.join(cwd, "skills", "user.md"), "utf8")).toBe("user\n");
+		});
+	});
+
+	it("never removes a SKILL.md that existed before the session", async () => {
+		await withAgent((cwd) => {
+			fs.mkdirSync(path.dirname(path.join(cwd, skill)), { recursive: true });
+			fs.writeFileSync(path.join(cwd, skill), "mine\n");
+		}, async (connection, cwd) => {
+			const session = await connection.newSession(cwd);
+			await hello(connection, session.sessionId);
+			await connection.resumeSession(session.sessionId, cwd);
+			expect(fs.readFileSync(path.join(cwd, skill), "utf8")).toBe("mine\n");
+		});
+	});
+});

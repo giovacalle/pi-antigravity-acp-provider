@@ -25,6 +25,7 @@ import {
 	type SessionSelectorCategory,
 	type SessionState,
 } from "./session-state.js";
+import { rememberSystemSkillTree, removeSystemSkillTree } from "./system-skills.js";
 
 const DEFAULT_OPERATION_TIMEOUT_MS = 120_000;
 
@@ -55,6 +56,7 @@ export class AntigravityAcpConnection {
 	private readonly protocolFailure: Promise<never>;
 	private readonly processFailure: Promise<never>;
 	private readonly sessions = new Map<string, SessionState>();
+	private readonly sessionCwds = new Map<string, string>();
 	private handlers: AntigravityConnectionHandlers;
 	private closePromise?: Promise<void>;
 
@@ -173,19 +175,20 @@ export class AntigravityAcpConnection {
 		meta?: Record<string, unknown>,
 	): Promise<AcpNewSessionResponse> {
 		await this.initialize();
-		const response = await this.withAbort(
+		const response = await this.withSystemSkillCleanup(cwd, () => this.withAbort(
 			this.withDeadline(
 				this.connection.newSession({ cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }),
 				this.operationTimeoutMs,
 				"session/new",
 			),
 			signal,
-		);
+		));
 		if (typeof response?.sessionId !== "string" || !response.sessionId) {
 			throw new AntigravityAcpError("protocol", "Invalid ACP new-session response");
 		}
 		const session = { ...response, ...decodeSessionState(response) };
 		this.sessions.set(session.sessionId, session);
+		this.sessionCwds.set(session.sessionId, cwd);
 		return session;
 	}
 
@@ -197,14 +200,15 @@ export class AntigravityAcpConnection {
 		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
 		await this.initialize();
-		const response = await this.withAbort(
+		const response = await this.withSystemSkillCleanup(cwd, () => this.withAbort(
 			this.withDeadline(
 				this.connection.loadSession({ sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }),
 				this.operationTimeoutMs,
 				"session/load",
 			),
 			signal,
-		);
+		));
+		this.sessionCwds.set(sessionId, cwd);
 		return this.updateSessionState(sessionId, response);
 	}
 
@@ -216,14 +220,15 @@ export class AntigravityAcpConnection {
 		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
 		await this.initialize();
-		const response = await this.withAbort(
+		const response = await this.withSystemSkillCleanup(cwd, () => this.withAbort(
 			this.withDeadline(
 				this.connection.resumeSession({ sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) }),
 				this.operationTimeoutMs,
 				"session/resume",
 			),
 			signal,
-		);
+		));
+		this.sessionCwds.set(sessionId, cwd);
 		return this.updateSessionState(sessionId, response);
 	}
 
@@ -287,7 +292,10 @@ export class AntigravityAcpConnection {
 
 	async prompt(request: PromptRequest, signal?: AbortSignal): Promise<PromptResponse> {
 		if (signal?.aborted) throw abortError();
-		const pending = this.withProgressWatchdog(request);
+		const cwd = this.sessionCwds.get(request.sessionId);
+		const pending = this.withProgressWatchdog(request).finally(() => {
+			if (cwd) removeSystemSkillTree(cwd);
+		});
 		if (!signal) return pending;
 
 		return new Promise<PromptResponse>((resolve, reject) => {
@@ -326,8 +334,19 @@ export class AntigravityAcpConnection {
 	}
 
 	async close(): Promise<void> {
-		this.closePromise ??= this.process.close();
+		this.closePromise ??= this.process.close().finally(() => {
+			for (const cwd of new Set(this.sessionCwds.values())) removeSystemSkillTree(cwd);
+		});
 		await this.closePromise;
+	}
+
+	private async withSystemSkillCleanup<T>(cwd: string, setup: () => Promise<T>): Promise<T> {
+		rememberSystemSkillTree(cwd);
+		try {
+			return await setup();
+		} finally {
+			removeSystemSkillTree(cwd);
+		}
 	}
 
 	private updateSessionState(sessionId: string, response: unknown): SessionState {
