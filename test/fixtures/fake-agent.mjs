@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -144,7 +145,15 @@ for await (const line of rl) {
 			});
 			continue;
 		}
-		const sessionId = `fake-session-${++sessionCount}`;
+		// agy writes a conversation store per new session; opt-in, and only under an explicit GEMINI_HOME.
+		const conversations = process.env.FAKE_AGENT_CONVERSATIONS && process.env.GEMINI_HOME?.trim()
+			? path.join(process.env.GEMINI_HOME, "antigravity-acp", "conversations") : undefined;
+		const sessionId = conversations && process.env.FAKE_AGENT_CONVERSATIONS === "uuid" ? randomUUID() : `fake-session-${++sessionCount}`;
+		if (conversations) {
+			fs.mkdirSync(conversations, { recursive: true });
+			for (const suffix of [".db", ".db-shm", ".db-wal"]) fs.writeFileSync(path.join(conversations, sessionId + suffix), "");
+			fs.writeFileSync(path.join(conversations, `${sessionId}.meta`), JSON.stringify({ cwd: params.cwd }));
+		}
 		const session = state(sessionId);
 		session.mcpServer = params.mcpServers?.find((server) => server.type === "http");
 		session.cwd = params.cwd;

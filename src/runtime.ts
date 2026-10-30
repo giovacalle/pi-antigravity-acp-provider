@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import {
 	clearAntigravityCredentials,
 	inspectAntigravityAuth,
+	removeConversation,
 	type AntigravityAuthHealth,
 } from "./acp/antigravity.js";
 import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./acp/connection.js";
@@ -281,16 +282,19 @@ export class AntigravityRuntime {
 		if (signal?.aborted) throw abortError();
 		this.assertEpoch(epoch);
 		const connection = this.createConnection({ cwd: process.cwd() });
+		let sessionId: string | undefined;
 		try {
 			const initialize = await connection.initialize(signal);
 			this.assertEpoch(epoch);
 			await authenticateForCredential(connection, initialize, apiKey, signal);
 			this.assertEpoch(epoch);
 			const session = await connection.newSession(process.cwd(), signal);
+			sessionId = session.sessionId;
 			this.assertEpoch(epoch);
 			return sessionModels(session)?.availableModels ?? [];
 		} finally {
 			await connection.close();
+			forgetThrowawaySession(connection, sessionId);
 		}
 	}
 
@@ -334,6 +338,7 @@ export class AntigravityRuntime {
 			return parseUsageQuota(text);
 		} finally {
 			await connection.close();
+			forgetThrowawaySession(connection, sessionId);
 		}
 	}
 
@@ -1248,6 +1253,12 @@ export class AntigravityRuntime {
 // One shared process per account: the managed login, or each API key.
 function poolKey(apiKey: string | undefined): string {
 	return !apiKey || apiKey === MANAGED_AUTH_MARKER ? "managed" : `key:${createHash("sha256").update(apiKey).digest("hex")}`;
+}
+
+// agy keeps no index and offers no delete RPC, so a throwaway session's files are removed directly,
+// but only once its process is gone: close() can give up on a process that ignored SIGKILL.
+function forgetThrowawaySession(connection: AntigravityAcpConnection, sessionId: string | undefined): void {
+	if (sessionId && !connection.process.alive) removeConversation(sessionId);
 }
 
 async function authenticateForCredential(
