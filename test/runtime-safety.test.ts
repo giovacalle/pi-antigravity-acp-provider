@@ -405,6 +405,23 @@ describe("live session cap", () => {
 		expect(connections[0]!.process.alive).toBe(true);
 		expect(connections[1]!.process.alive).toBe(true);
 	});
+
+	it("never evicts a session whose turn is starting", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { maxLiveSessions: 1 });
+		const first = await turn(runtime, [user("hello")], "A");
+
+		const [again, other] = await Promise.all([
+			turn(runtime, [user("hello"), first, user("again", 2)], "A"),
+			turn(runtime, [user("hello")], "B"),
+		]);
+
+		expect([again.stopReason, other.stopReason]).toEqual(["stop", "stop"]);
+		expect(connections).toHaveLength(2);
+		expect(connections[0]!.process.alive).toBe(true);
+		const snapshot = await runtime.snapshot();
+		expect(snapshot.capEvictions).toBe(0);
+		expect(snapshot.capOverflows).toBe(1);
+	});
 });
 
 describe("instruction updates during continuations", () => {
