@@ -91,6 +91,32 @@ export function projectModels(models: readonly AcpModelInfo[]): Model<typeof API
 	return projected;
 }
 
+/** Rebuild a catalog Pi persisted on disk. Only ids, names and effort variants
+ * are taken from the stored entries; every other field comes from the same
+ * constructors discovery uses, and entries of other providers are dropped. */
+export function restoreModels(models: readonly unknown[]): Model<typeof API_ID>[] {
+	const seen = new Set<string>();
+	const restored: Model<typeof API_ID>[] = [];
+	for (const entry of models) {
+		if (!entry || typeof entry !== "object") continue;
+		const candidate = entry as Partial<Model<typeof API_ID>>;
+		const id = candidate.id;
+		if (candidate.provider !== PROVIDER_ID || candidate.api !== API_ID) continue;
+		if (typeof id !== "string" || !validModelId(id) || seen.has(id)) continue;
+		seen.add(id);
+		const name = typeof candidate.name === "string" && candidate.name.trim() ? candidate.name.trim() : id;
+		const variants: Variants = {};
+		for (const effort of ["low", "medium", "high"] as const) {
+			const value = candidate.thinkingLevelMap?.[effort];
+			if (typeof value === "string" && validModelId(value)) variants[effort] = value;
+		}
+		restored.push(candidate.reasoning === true && Object.keys(variants).length > 0
+			? reasoningModel(id, name, variants)
+			: fixedModel(id, name));
+	}
+	return restored;
+}
+
 export type ModelEffort = "low" | "medium" | "high";
 
 /** Antigravity advertises effort-qualified ids (`gemini-3.8-flash-high`) while the

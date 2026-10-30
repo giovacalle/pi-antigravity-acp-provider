@@ -10,8 +10,11 @@ import type {
 } from "@earendil-works/pi-ai";
 
 import { hasAntigravityAuth } from "./acp/antigravity.js";
-import { FALLBACK_MODELS, projectModels, PROVIDER_ID } from "./models.js";
+import { FALLBACK_MODELS, projectModels, PROVIDER_ID, restoreModels } from "./models.js";
 import { AntigravityRuntime, MANAGED_AUTH_MARKER } from "./runtime.js";
+
+// A stored catalog younger than this is reused without launching agy.
+const CATALOG_FRESH_MS = 24 * 60 * 60_000;
 
 export interface AntigravityProviderBundle {
 	provider: Provider<"antigravity-acp">;
@@ -105,7 +108,17 @@ export function createAntigravityProvider(runtime = new AntigravityRuntime()): A
 		},
 		getModels: () => models,
 		async refreshModels(context: RefreshModelsContext) {
-			if (!context.allowNetwork) return;
+			const restored = context.stored ? restoreModels(context.stored.models) : [];
+			if (restored.length > 0) {
+				const published = await context.publish({
+					update: () => {
+						models = restored;
+					},
+				});
+				if (!published) return;
+			}
+			if (!context.allowNetwork || context.signal.aborted) return;
+			if (restored.length > 0 && !context.force && fresh(context.stored?.checkedAt)) return;
 			const key =
 				context.credential?.type === "api_key"
 					? context.credential.key
@@ -116,12 +129,13 @@ export function createAntigravityProvider(runtime = new AntigravityRuntime()): A
 			try {
 				discovered = projectModels(await runtime.discoverModels(key, context.signal));
 			} catch {
-				// Startup refresh must not hide the conservative offline catalog when
+				// Startup refresh must not hide the restored or offline catalog when
 				// authentication is absent, expired, or temporarily unavailable.
 				return;
 			}
 			if (discovered.length === 0) return;
 			await context.publish({
+				persist: { models: discovered, checkedAt: Date.now() },
 				update: () => {
 					models = discovered;
 				},
@@ -135,6 +149,12 @@ export function createAntigravityProvider(runtime = new AntigravityRuntime()): A
 		},
 	};
 	return { provider, runtime };
+}
+
+function fresh(checkedAt: number | undefined): boolean {
+	if (typeof checkedAt !== "number") return false;
+	const age = Date.now() - checkedAt;
+	return age >= 0 && age < CATALOG_FRESH_MS;
 }
 
 function stream(
