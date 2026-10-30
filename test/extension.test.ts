@@ -213,6 +213,12 @@ describe("extension entry point", () => {
 		await pi.commands.get("antigravity-acp")!.handler("models", { ...ctx, modelRegistry: { refresh } } as never);
 		expect(ctx.ui.notify.mock.calls.at(-1)).toEqual(["Antigravity model refresh failed: offline", "warning"]);
 	});
+	it("reports a cancelled model catalog refresh", async () => {
+		const { pi, ctx } = await load("parent");
+		const refresh = vi.fn(async () => ({ aborted: true, errors: new Map() }));
+		await pi.commands.get("antigravity-acp")!.handler("models", { ...ctx, modelRegistry: { refresh } } as never);
+		expect(ctx.ui.notify.mock.calls.at(-1)).toEqual(["Antigravity model refresh was cancelled", "warning"]);
+	});
 });
 
 describe("live quota", () => {

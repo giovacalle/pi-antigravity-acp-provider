@@ -157,12 +157,16 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 			if (command === "models") {
 				const result = await ctx.modelRegistry.refresh({ providers: [provider.id], allowNetwork: true, force: true });
 				const error = result.errors.get(provider.id);
-				ctx.ui.notify(
-					error
-						? `Antigravity model refresh failed: ${errorMessage(error)}`
-						: `Antigravity models: ${provider.getModels().map((model) => model.id).join(", ")}`,
-					error ? "warning" : "info",
-				);
+				if (result.aborted || error) {
+					ctx.ui.notify(
+						error
+							? `Antigravity model refresh failed: ${errorMessage(error)}`
+							: "Antigravity model refresh was cancelled",
+						"warning",
+					);
+					return;
+				}
+				ctx.ui.notify(`Antigravity models: ${provider.getModels().map((model) => model.id).join(", ")}`, "info");
 				return;
 			}
 			if (command === "qualify") {
