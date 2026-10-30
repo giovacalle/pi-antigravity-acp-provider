@@ -26,7 +26,7 @@ describe("prompt context", () => {
 		};
 		const fresh = buildPromptParts(context, true);
 		const warm = buildPromptParts(context, false);
-		expect(fresh.prompt).toHaveLength(2);
+		expect(fresh.prompt).toHaveLength(3);
 		expect(fresh.prompt[0]?.type).toBe("resource");
 		expect(warm.prompt).toEqual([{ type: "text", text: "new" }]);
 	});
@@ -83,7 +83,7 @@ describe("prompt context", () => {
 		expect(block.resource.text).not.toContain("Old rules");
 		expect(block.resource.text).not.toContain("Obsolete");
 		expect(block.resource.text).not.toContain("Tool result (undefined");
-		expect(result.prompt[1]).toEqual({ type: "text", text: "new" });
+		expect(result.prompt.slice(1)).toEqual([{ type: "text", text: "---\n\n# Current Pi user request" }, { type: "text", text: "new" }]);
 	});
 
 	it("adds only unseen external deltas to a warm prompt", () => {
@@ -95,12 +95,12 @@ describe("prompt context", () => {
 			],
 		};
 		const result = buildPromptParts(context, false, 1);
-		expect(result.prompt).toHaveLength(2);
+		expect(result.prompt).toHaveLength(3);
 		expect(result.prompt[0]).toMatchObject({
 			type: "resource",
 			resource: { text: expect.stringContaining("externally inserted") },
 		});
-		expect(result.prompt[1]).toEqual({ type: "text", text: "current" });
+		expect(result.prompt.slice(1)).toEqual([{ type: "text", text: "---\n\n# Current Pi user request" }, { type: "text", text: "current" }]);
 	});
 });
 

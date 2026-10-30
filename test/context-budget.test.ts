@@ -37,7 +37,7 @@ describe("bounded context reconstruction", () => {
 		expect(history).toContain("RESULT_TAIL");
 		expect(history).not.toContain("ACTIVE_REQUEST");
 		expect(prompt.slice(1)).toEqual([
-			{ type: "text", text: expect.stringContaining("# Current Pi user request") },
+			{ type: "text", text: expect.stringMatching(/^---\n\nContinue[\s\S]*# Current Pi user request$/u) },
 			{ type: "text", text: "ACTIVE_REQUEST" }, IMAGE,
 		]);
 	});
@@ -198,7 +198,7 @@ describe("slash command neutralization", () => {
 	it("neutralizes the request after the cold context resource", () => {
 		const { prompt } = buildPromptParts({ systemPrompt: "RULES", messages: [{ role: "user", content: "/usage", timestamp: 1 }] }, true);
 		expect(prompt[0]?.type).toBe("resource");
-		expect(prompt.slice(1)).toEqual([{ type: "text", text: `${ZWSP}/usage` }]);
+		expect(prompt.slice(1)).toEqual([{ type: "text", text: "---\n\n# Current Pi user request" }, { type: "text", text: `${ZWSP}/usage` }]);
 	});
 
 	it("neutralizes the request after the continuation label and keeps its images", () => {
