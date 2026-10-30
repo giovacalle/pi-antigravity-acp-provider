@@ -22,6 +22,8 @@ interface PoolEntry {
 	leases: number;
 	handlers: Map<string, AntigravityConnectionHandlers>;
 	idleTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Updates and permission requests for a session no lease registered; they are dropped or
+	 * cancelled, never delivered to another session. */
 	unknownSessionMessages: number;
 }
 
@@ -44,9 +46,6 @@ export interface PooledProcessSnapshot {
  * by up to `maxSessionsPerProcess - 1`.
  */
 export class AcpConnectionPool {
-	/** Updates and permission requests for a session no lease registered; they are dropped or
-	 * cancelled, never delivered to another session. */
-	unknownSessionMessages = 0;
 	private readonly maxSessionsPerProcess: number;
 	private readonly recycleAfterSessions: number;
 	private readonly idleTtlMs: number;
@@ -161,16 +160,12 @@ export class AcpConnectionPool {
 				onUpdate: (notification) => {
 					const handlers = entry.handlers.get(notification.sessionId);
 					if (handlers) return handlers.onUpdate?.(notification);
-					this.unknownSessionMessages += 1;
 					entry.unknownSessionMessages += 1;
 				},
 				onPermission: (request) => {
 					const handlers = entry.handlers.get(request.sessionId);
 					if (handlers?.onPermission) return handlers.onPermission(request);
-					if (!handlers) {
-						this.unknownSessionMessages += 1;
-						entry.unknownSessionMessages += 1;
-					}
+					if (!handlers) entry.unknownSessionMessages += 1;
 					return Promise.resolve({ outcome: { outcome: "cancelled" } });
 				},
 			});
