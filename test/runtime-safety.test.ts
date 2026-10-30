@@ -23,7 +23,7 @@ afterEach(async () => {
 	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore, limits?: { idleTtlMs?: number; maxLiveSessions?: number; nativeTools?: NativeTools }) {
+function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore, limits?: { idleTtlMs?: number; maxLiveSessions?: number; nativeTools?: NativeTools; sharedProcess?: boolean; maxSessionsPerProcess?: number }) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-runtime-safety-")); roots.push(root);
 	const log = path.join(root, "calls.jsonl"); fs.writeFileSync(log, "");
 	const connections: AntigravityAcpConnection[] = [];
@@ -494,6 +494,96 @@ describe("live session cap", () => {
 		const snapshot = await runtime.snapshot();
 		expect(snapshot.capEvictions).toBe(0);
 		expect(snapshot.capOverflows).toBe(1);
+	});
+});
+
+describe("shared process", () => {
+	const text = (message: Awaited<ReturnType<typeof turn>>) =>
+		message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("");
+	const counted = (marker: string, n: number) => Array.from({ length: n }, (_, i) => `${marker}${i + 1};`).join("");
+
+	it("routes concurrent sessions on one process to their own streams", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { sharedProcess: true });
+
+		const [a, b] = await Promise.all([turn(runtime, [user("count 6 alpha")], "A"), turn(runtime, [user("count 6 beta")], "B")]);
+
+		expect(connections).toHaveLength(1);
+		expect(text(a)).toBe(counted("alpha", 6));
+		expect(text(b)).toBe(counted("beta", 6));
+	});
+
+	it("delivers a permission request only to the owning session", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { sharedProcess: true });
+
+		const [a, b] = await Promise.all([turn(runtime, [user("request permission")], "A"), turn(runtime, [user("count 3 beta")], "B")]);
+
+		expect(connections).toHaveLength(1);
+		expect(a.stopReason).toBe("toolUse");
+		expect(a.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: PERMISSION_TOOL_NAME }));
+		expect(b.stopReason).toBe("stop");
+		expect(b.content.some((block) => block.type === "toolCall")).toBe(false);
+		expect(text(b)).toBe(counted("beta", 3));
+	});
+
+	it("abandons an aborted session that ignores cancel without disturbing the other", async () => {
+		const { runtime, connections, entries } = setup(undefined, "yolo", undefined, { sharedProcess: true });
+		const controller = new AbortController();
+		const aborted = drain(runtime.stream(model, { messages: [user("ignore cancel")] }, { sessionId: "A", apiKey: "test-key", signal: controller.signal }));
+		const other = turn(runtime, [user("count 60 beta")], "B");
+		await vi.waitFor(() => expect(entries().filter((entry) => entry.method === "session/prompt")).toHaveLength(2));
+
+		controller.abort();
+
+		expect((await aborted).stopReason).toBe("aborted");
+		const b = await other;
+		expect(b.stopReason).toBe("stop");
+		expect(text(b)).toBe(counted("beta", 60));
+		expect(connections).toHaveLength(1);
+		expect(connections[0]!.process.alive).toBe(true);
+		const next = await turn(runtime, [user("hello")], "A");
+		expect(next.stopReason).toBe("stop");
+		expect(connections).toHaveLength(1);
+		expect(entries().filter((entry) => entry.method === "session/new")).toHaveLength(3);
+	});
+
+	it("gives each session on a shared process its own Pi bridge name", async () => {
+		const { runtime, entries } = setup(undefined, "yolo", undefined, { sharedProcess: true });
+		const toolTurn = (sessionId: string) => drain(runtime.stream(model, { tools, messages: [user("hello")] }, { sessionId, apiKey: "test-key" }));
+
+		await Promise.all([toolTurn("A"), toolTurn("B")]);
+
+		const names = entries().filter((entry) => entry.method === "session/new")
+			.map((entry) => (entry._meta as { antigravity: { eagerMcpServers: string[] } }).antigravity.eagerMcpServers[0]);
+		expect(names).toEqual([expect.stringMatching(/^pi-bridge-[0-9a-f]{8}$/u), expect.stringMatching(/^pi-bridge-[0-9a-f]{8}$/u)]);
+		expect(names[0]).not.toBe(names[1]);
+	});
+
+	it("keeps a process per session when the flag is off", async () => {
+		const { runtime, connections } = setup();
+
+		await Promise.all([turn(runtime, [user("count 6 alpha")], "A"), turn(runtime, [user("count 6 beta")], "B")]);
+
+		expect(connections).toHaveLength(2);
+	});
+
+	it("opens another process once one holds the maximum sessions", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { sharedProcess: true, maxSessionsPerProcess: 1 });
+
+		await Promise.all([turn(runtime, [user("count 6 alpha")], "A"), turn(runtime, [user("count 6 beta")], "B")]);
+
+		expect(connections).toHaveLength(2);
+	});
+
+	it("fails every session on a process that exits", async () => {
+		const { runtime, connections } = setup(undefined, "yolo", undefined, { sharedProcess: true });
+
+		const [a, b] = await Promise.all([turn(runtime, [user("count 60 alpha")], "A"), turn(runtime, [user("crash process")], "B")]);
+
+		expect(a.stopReason).toBe("error");
+		expect(b.stopReason).toBe("error");
+		await vi.waitFor(async () => expect((await runtime.snapshot()).bindings).toBe(0));
+		expect((await turn(runtime, [user("hello")], "A")).stopReason).toBe("stop");
+		expect(connections).toHaveLength(2);
 	});
 });
 

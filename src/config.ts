@@ -13,10 +13,15 @@ export interface AntigravityAcpConfig {
 	idleTtlMs: number;
 	maxLiveSessions: number;
 	nativeTools: NativeTools;
+	/** Run concurrent sessions of one account on a shared ACP process. */
+	sharedProcess: boolean;
+	maxSessionsPerProcess: number;
 }
 
 export const DEFAULT_IDLE_TTL_MS = 600_000;
 export const DEFAULT_MAX_LIVE_SESSIONS = 4;
+// About 840 MB with four live sessions on one Antigravity server.
+export const DEFAULT_MAX_SESSIONS_PER_PROCESS = 4;
 
 export function resolvePiAgentDir(): string {
 	const custom = process.env.PI_CODING_AGENT_DIR?.trim();
@@ -58,6 +63,8 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 			idleTtlMs?: unknown;
 			maxLiveSessions?: unknown;
 			nativeTools?: unknown;
+			sharedProcess?: unknown;
+			maxSessionsPerProcess?: unknown;
 		};
 		return {
 			permissions: isPermissionMode(parsed.permissions) ? parsed.permissions : "yolo",
@@ -67,11 +74,16 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 				? parsed.maxLiveSessions as number
 				: DEFAULT_MAX_LIVE_SESSIONS,
 			nativeTools: isNativeTools(parsed.nativeTools) ? parsed.nativeTools : "all",
+			sharedProcess: parsed.sharedProcess === true,
+			maxSessionsPerProcess: Number.isSafeInteger(parsed.maxSessionsPerProcess) && (parsed.maxSessionsPerProcess as number) >= 1
+				? parsed.maxSessionsPerProcess as number
+				: DEFAULT_MAX_SESSIONS_PER_PROCESS,
 		};
 	} catch {
 		// Missing or malformed configuration uses the documented defaults.
 	}
-	return { permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: DEFAULT_IDLE_TTL_MS, maxLiveSessions: DEFAULT_MAX_LIVE_SESSIONS, nativeTools: "all" };
+	return { permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: DEFAULT_IDLE_TTL_MS, maxLiveSessions: DEFAULT_MAX_LIVE_SESSIONS, nativeTools: "all",
+		sharedProcess: false, maxSessionsPerProcess: DEFAULT_MAX_SESSIONS_PER_PROCESS };
 }
 
 export function savePermissionMode(mode: PermissionMode, file = resolveConfigPath()): void {

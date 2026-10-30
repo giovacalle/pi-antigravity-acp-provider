@@ -24,6 +24,7 @@ import {
 	type AntigravityAuthHealth,
 } from "./acp/antigravity.js";
 import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./acp/connection.js";
+import { AcpConnectionPool, type ConnectionLease, type OpenedConnection } from "./acp/connection-pool.js";
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
 import { quotaExhaustion } from "./acp/quota.js";
 import { AcpSessionStore } from "./acp/session-store.js";
@@ -46,7 +47,7 @@ import {
 	type ToolOmission,
 	type PiToolInvocation,
 } from "./mcp/bridge.js";
-import { DEFAULT_IDLE_TTL_MS, DEFAULT_MAX_LIVE_SESSIONS, type NativeTools, type PermissionMode } from "./config.js";
+import { DEFAULT_IDLE_TTL_MS, DEFAULT_MAX_LIVE_SESSIONS, DEFAULT_MAX_SESSIONS_PER_PROCESS, type NativeTools, type PermissionMode } from "./config.js";
 import { resolveAcpModelId } from "./models.js";
 import { type PromptParts, buildPromptParts, currentSystemInstructions } from "./stream/context.js";
 import { PiEventWriter } from "./stream/pi-events.js";
@@ -78,6 +79,8 @@ interface Binding {
 	key: string;
 	cwd: string;
 	connection: AntigravityAcpConnection;
+	/** Set when the connection is shared with other bindings. */
+	lease: ConnectionLease | undefined;
 	initialize: InitializeResponse;
 	session: AcpNewSessionResponse;
 	mode: PermissionMode;
@@ -184,14 +187,24 @@ export class AntigravityRuntime {
 	private readonly nativeTools: NativeTools;
 	private quotaCache: AntigravityQuotaSnapshot | undefined;
 	private quotaInFlight: Promise<AntigravityQuotaSnapshot> | undefined;
+	private readonly pool: AcpConnectionPool | undefined;
 
 	constructor(
 		connectionFactory?: AntigravityConnectionFactory,
 		permissionMode: PermissionMode = "yolo",
 		sessionStore?: AcpSessionStore,
-		limits: { idleTtlMs?: number; maxLiveSessions?: number; nativeTools?: NativeTools } = {},
+		limits: {
+			idleTtlMs?: number;
+			maxLiveSessions?: number;
+			nativeTools?: NativeTools;
+			sharedProcess?: boolean;
+			maxSessionsPerProcess?: number;
+		} = {},
 	) {
 		this.nativeTools = limits.nativeTools ?? "all";
+		if (limits.sharedProcess) {
+			this.pool = new AcpConnectionPool({ maxSessionsPerProcess: limits.maxSessionsPerProcess ?? DEFAULT_MAX_SESSIONS_PER_PROCESS });
+		}
 		this.maxLiveSessions = limits.maxLiveSessions ?? DEFAULT_MAX_LIVE_SESSIONS;
 		this.connectionFactory = connectionFactory ?? ((options) => new AntigravityAcpConnection(options));
 		this.ensureAgent = connectionFactory === undefined;
@@ -552,6 +565,7 @@ export class AntigravityRuntime {
 
 	private async closeBindings(): Promise<void> {
 		this.bindingEpoch += 1;
+		this.pool?.closeAll();
 		const pending = [...this.bindings.values()];
 		this.bindings.clear();
 		for (const binding of this.resolvedBindings) {
@@ -769,7 +783,9 @@ export class AntigravityRuntime {
 		} catch (error) {
 			binding.writer?.fail(error, isAbort(error));
 			if (isAbort(error) || binding.abortRequested) abortTurn(binding);
-			if (!binding.connection.process.alive) await this.dropBinding(key, binding);
+			// A lost session may still run its turn inside agy, so it is never restored.
+			const lost = binding.connection.isSessionLost(binding.session.sessionId);
+			if (lost || !binding.connection.process.alive) await this.dropBinding(key, binding, lost);
 			throw error;
 		} finally {
 			if (onTurnAbort) options.signal?.removeEventListener("abort", onTurnAbort);
@@ -797,7 +813,9 @@ export class AntigravityRuntime {
 			abortTurn(binding);
 			void binding.connection.cancel(binding.session.sessionId).catch(() => undefined);
 			killTimer = setTimeout(() => {
-				if (binding.turnCompletion === completion) void binding.connection.close();
+				if (binding.turnCompletion !== completion) return;
+				if (binding.lease) binding.connection.abandonSession(binding.session.sessionId, abortError());
+				else void binding.connection.close();
 			}, 1_500);
 		};
 		if (signal.aborted) abort();
@@ -883,17 +901,19 @@ export class AntigravityRuntime {
 		let binding: Binding | undefined;
 		let bridge: PiMcpBridge | undefined;
 		const epoch = this.bindingEpoch;
-		const connection = this.createConnection({
-			cwd,
-			handlers: {
-				onUpdate: (notification) => this.consumeUpdate(binding, notification),
-				onPermission: (request) => this.requestPermission(binding, request),
-			},
-		});
+		const handlers = {
+			onUpdate: (notification: SessionNotification) => this.consumeUpdate(binding, notification),
+			onPermission: (request: RequestPermissionRequest) => this.requestPermission(binding, request),
+		};
+		const lease = this.pool
+			? await this.pool.acquire(poolKey(apiKey), () => this.openShared(apiKey), signal)
+			: undefined;
+		const connection = lease?.connection ?? this.createConnection({ cwd, handlers });
 		try {
-			const initialize = await connection.initialize();
 			this.assertEpoch(epoch);
-			await authenticateForCredential(connection, initialize, apiKey, signal);
+			const initialize = lease?.initialize ?? await connection.initialize();
+			this.assertEpoch(epoch);
+			if (!lease) await authenticateForCredential(connection, initialize, apiKey, signal);
 			this.assertEpoch(epoch);
 			const omittedTools = initialize.agentCapabilities?.mcpCapabilities?.http === true
 				? planToolProjection(tools)
@@ -903,6 +923,8 @@ export class AntigravityRuntime {
 				bridge = new PiMcpBridge({
 					tools,
 					onCall: (invocation) => this.requestPiTool(binding, invocation),
+					// Distinct per Pi session, so sessions sharing a process never share a server name.
+					...(lease ? { serverName: `pi-bridge-${createHash("sha256").update(key).digest("hex").slice(0, 8)}` } : {}),
 				});
 				mcpServer = await bridge.start();
 			}
@@ -934,6 +956,7 @@ export class AntigravityRuntime {
 				}
 			}
 			session ??= await connection.newSession(cwd, signal, mcpServers, meta);
+			lease?.register(session.sessionId, handlers);
 			this.assertEpoch(epoch);
 			const mode = this.permissionMode;
 			if (!supportsMode(session, mode)) {
@@ -952,6 +975,7 @@ export class AntigravityRuntime {
 				key,
 				cwd,
 				connection,
+				lease,
 				initialize,
 				session,
 				mode,
@@ -995,7 +1019,21 @@ export class AntigravityRuntime {
 			}).catch(() => undefined);
 			return createdBinding;
 		} catch (error) {
-			await Promise.allSettled([connection.close(), bridge?.close() ?? Promise.resolve()]);
+			lease?.release();
+			await Promise.allSettled([lease ? Promise.resolve() : connection.close(), bridge?.close() ?? Promise.resolve()]);
+			throw error;
+		}
+	}
+
+	private async openShared(apiKey: string | undefined): Promise<OpenedConnection> {
+		// Each session's workspace travels on session/new|load|resume; the process cwd is only inherited.
+		const connection = this.createConnection({ cwd: process.cwd(), sessionScopedFaults: true });
+		try {
+			const initialize = await connection.initialize();
+			await authenticateForCredential(connection, initialize, apiKey);
+			return { connection, initialize };
+		} catch (error) {
+			await connection.close();
 			throw error;
 		}
 	}
@@ -1107,7 +1145,17 @@ export class AntigravityRuntime {
 		this.resolvedBindings.delete(binding);
 		cancelPermission(binding);
 		cancelPiTools(binding, "Antigravity session closed before Pi returned the tool result");
-		await Promise.allSettled([binding.connection.close(), binding.bridge?.close() ?? Promise.resolve()]);
+		await Promise.allSettled([this.closeBindingConnection(binding), binding.bridge?.close() ?? Promise.resolve()]);
+	}
+
+	/** A shared process outlives its bindings; a turn still running there is abandoned instead. */
+	private async closeBindingConnection(binding: Binding): Promise<void> {
+		if (!binding.lease) {
+			await binding.connection.close();
+			return;
+		}
+		if (binding.turnCompletion) binding.connection.abandonSession(binding.session.sessionId);
+		binding.lease.release();
 	}
 
 	private confirmedMode(binding: Binding): string | undefined {
@@ -1144,6 +1192,11 @@ export class AntigravityRuntime {
 	private assertActive(): void {
 		if (this.disposed) throw new AntigravityAcpError("process_exit", "Antigravity ACP runtime is closed");
 	}
+}
+
+// One shared process per account: the managed login, or each API key.
+function poolKey(apiKey: string | undefined): string {
+	return !apiKey || apiKey === MANAGED_AUTH_MARKER ? "managed" : `key:${createHash("sha256").update(apiKey).digest("hex")}`;
 }
 
 async function authenticateForCredential(
