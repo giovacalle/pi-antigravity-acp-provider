@@ -79,11 +79,12 @@ describe("model catalog refresh", () => {
 	async function refresh(
 		options: Partial<RefreshModelsContext> & { publishResult?: boolean; discoveryFails?: boolean } = {},
 	) {
+		const { publishResult, discoveryFails, ...context } = options;
 		const runtime = new AntigravityRuntime(() => {
 			throw new Error("no ACP process expected");
 		});
 		const discover = vi.spyOn(runtime, "discoverModels");
-		if (options.discoveryFails) discover.mockRejectedValue(new Error("offline"));
+		if (discoveryFails) discover.mockRejectedValue(new Error("offline"));
 		else discover.mockResolvedValue([
 			{ modelId: "gemini-x-low", name: "Gemini X (low)" },
 			{ modelId: "gemini-x-high", name: "Gemini X (high)" },
@@ -92,19 +93,20 @@ describe("model catalog refresh", () => {
 		try {
 			const { provider } = createAntigravityProvider(runtime);
 			const started = Date.now();
-			await provider.refreshModels!({
+			const error = await provider.refreshModels!({
 				credential: { type: "api_key", key: "k" },
 				signal: new AbortController().signal,
 				allowNetwork: true,
-				...options,
+				...context,
 				async publish(publication) {
 					publications.push(publication);
-					if (options.publishResult === false) return false;
+					if (publishResult === false) return false;
 					publication.update?.();
 					return true;
 				},
-			});
+			}).then(() => undefined, (failure: unknown) => failure);
 			return {
+				error,
 				calls: discover.mock.calls.length,
 				ids: provider.getModels().map((entry) => entry.id),
 				models: provider.getModels(),
@@ -149,6 +151,17 @@ describe("model catalog refresh", () => {
 			stored: { models: storedModels, checkedAt: Date.now() - 25 * HOUR },
 			discoveryFails: true,
 		});
+		expect(result.error).toBeUndefined();
+		expect(result.ids).toEqual(["gemini-y"]);
+	});
+
+	it("reports a failed forced discovery and keeps the stored catalog", async () => {
+		const result = await refresh({
+			stored: { models: storedModels, checkedAt: Date.now() },
+			force: true,
+			discoveryFails: true,
+		});
+		expect(result.error).toEqual(new Error("offline"));
 		expect(result.ids).toEqual(["gemini-y"]);
 	});
 
