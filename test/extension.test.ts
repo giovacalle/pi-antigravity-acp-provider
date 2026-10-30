@@ -198,6 +198,21 @@ describe("extension entry point", () => {
 			"Usage this process: turns=1 tokens=1200 input=600 output=200 reasoning=50 cacheRead=400",
 		);
 	});
+
+	it("forces a model catalog refresh for this provider", async () => {
+		const { pi, ctx } = await load("parent");
+		const refresh = vi.fn(async () => ({ aborted: false, errors: new Map() }));
+		await pi.commands.get("antigravity-acp")!.handler("models", { ...ctx, modelRegistry: { refresh } } as never);
+		expect(refresh).toHaveBeenCalledWith({ providers: ["antigravity-acp"], allowNetwork: true, force: true });
+		expect(ctx.ui.notify.mock.calls.at(-1)).toEqual([expect.stringMatching(/^Antigravity models: gemini-3\.8-flash, /u), "info"]);
+	});
+
+	it("reports a failed model catalog refresh", async () => {
+		const { pi, ctx } = await load("parent");
+		const refresh = vi.fn(async () => ({ aborted: false, errors: new Map([["antigravity-acp", new Error("offline")]]) }));
+		await pi.commands.get("antigravity-acp")!.handler("models", { ...ctx, modelRegistry: { refresh } } as never);
+		expect(ctx.ui.notify.mock.calls.at(-1)).toEqual(["Antigravity model refresh failed: offline", "warning"]);
+	});
 });
 
 describe("live quota", () => {
