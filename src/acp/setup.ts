@@ -335,6 +335,10 @@ async function installRelease(
 ): Promise<void> {
 	const versions = path.dirname(destination);
 	fs.mkdirSync(versions, { recursive: true, mode: 0o700 });
+	// Installs run under the update lock, so any staging directory left here belongs to an install that died mid-download.
+	for (const entry of fs.readdirSync(versions)) {
+		if (entry.startsWith(".install-")) fs.rmSync(path.join(versions, entry), { recursive: true, force: true });
+	}
 	const staging = fs.mkdtempSync(path.join(versions, ".install-"));
 	const archive = path.join(staging, "download.zip");
 	const runtime = path.join(staging, "runtime");
