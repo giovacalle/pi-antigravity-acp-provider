@@ -184,6 +184,7 @@ export class AntigravityRuntime {
 	private readonly activeConnections = new Set<AntigravityAcpConnection>();
 	private readonly queues = new Map<string, Promise<void>>();
 	private readonly sessionCwds = new Map<string, string>();
+	private readonly reportedOmissions = new Map<string, Set<string>>();
 	private modeChanges = Promise.resolve();
 	private evictionQueue: Promise<void> = Promise.resolve();
 	private idleCleanupTimer: ReturnType<typeof setInterval> | undefined;
@@ -542,11 +543,23 @@ export class AntigravityRuntime {
 		this.sessionCwds.set(piSessionId, cwd);
 	}
 
+	/** Returns the Pi session's omitted tools not returned before, so each is reported once per session. */
+	takeNewToolOmissions(piSessionId: string): ToolOmission[] {
+		const binding = [...this.resolvedBindings].find((candidate) => candidate.piSessionId === piSessionId);
+		if (!binding) return [];
+		const reported = this.reportedOmissions.get(piSessionId) ?? new Set<string>();
+		this.reportedOmissions.set(piSessionId, reported);
+		const fresh = binding.omittedTools.filter((tool) => !reported.has(tool.name));
+		for (const tool of fresh) reported.add(tool.name);
+		return fresh;
+	}
+
 	/** Closes one Pi session's binding but keeps its saved record so a later turn can resume it. */
 	async closeSession(piSessionId: string): Promise<void> {
 		const key = `sid:${piSessionId}`;
 		this.bumpSessionEpoch(key);
 		this.sessionCwds.delete(piSessionId);
+		this.reportedOmissions.delete(piSessionId);
 		this.queues.delete(key);
 		const binding = await this.bindings.get(key)?.catch(() => undefined);
 		if (!binding) return;

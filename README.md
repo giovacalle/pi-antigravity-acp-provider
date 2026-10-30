@@ -7,7 +7,7 @@ A [Pi](https://github.com/earendil-works/pi) provider for **Google Antigravity**
 - Registers `antigravity-acp/*` models with dynamic Shift+Tab reasoning effort selection for advertised tiers.
 - Uses ACP protocol v1 over the official TypeScript SDK (`@agentclientprotocol/sdk`).
 - Supports streaming, cancellation, usage/quota reporting, persisted session restoration, and cost estimation from reference catalog rates.
-- Bridges compatible Pi tools over an authenticated loopback MCP server; `doctor`/`status` lists any omitted tools and reasons. Pi tools are loaded eagerly so the model calls them directly; results larger than 48 KiB reach the model truncated by Antigravity.
+- Bridges compatible Pi tools over an authenticated loopback MCP server; string-keyed `Type.Record` and local `$ref`/`$defs` (including non-recursive TypeBox `Cyclic`) are projected. A tool that still cannot be projected (tuples, `not`, conditionals, recursive references) is omitted, reported once per Pi session with a warning, and listed with its reason by `doctor`/`status`. Pi tools are loaded eagerly so the model calls them directly; results larger than 48 KiB reach the model truncated by Antigravity.
 - Supports persisted `default`, `auto-edit`, and `yolo` permission modes (default: `yolo`) with a single-use, fail-closed Pi permission broker for prompting modes.
 - Verifies managed ACP runtime installs and updates against an Ed25519-signed catalog (`automatic`, `notify`, or `manual` update modes).
 - Supports interactive browser OAuth, automatic SSH/headless OAuth relay, and `GEMINI_API_KEY` authentication.

@@ -70,6 +70,44 @@ describe("MCP schema projection", () => {
 		]) omitted(property(value), "unsupported_keyword");
 	});
 
+	it("projects string-keyed records and local references", () => {
+		expect(projectedSchema(tool(Type.Object({ env: Type.Record(Type.String(), Type.String()) })))).toEqual({
+			type: "object", required: ["env"], properties: { env: { type: "object", additionalProperties: { type: "string" } } },
+		});
+		const local = projectedSchema(tool({
+			type: "object",
+			$defs: { Name: { type: "string", minLength: 1 } },
+			definitions: { Other: { type: "number" } },
+			properties: { a: { $ref: "#/$defs/Name", description: "name" }, b: { $ref: "#/definitions/Other" } },
+		}));
+		expect(local).toEqual({ type: "object", properties: { a: { type: "string", minLength: 1, description: "name" }, b: { type: "number" } } });
+		expect(JSON.stringify(local)).not.toMatch(/\$ref|\$defs|definitions/);
+		const cyclic = Type.Cyclic({ A: Type.Object({ x: Type.String() }), B: Type.Object({ a: Type.Ref("A") }) }, "B");
+		expect(projectedSchema(tool(cyclic))).toEqual({ type: "object", required: ["a"], properties: {
+			a: { type: "object", required: ["x"], properties: { x: { type: "string" } } },
+		} });
+	});
+
+	it("still omits recursive references, tuples and other pattern properties", () => {
+		omitted(Type.Cyclic({ Node: Type.Object({ next: Type.Optional(Type.Ref("Node")) }) }, "Node"), "cyclic_schema");
+		omitted({ type: "object", $defs: { Self: { type: "object", properties: { self: { $ref: "#/$defs/Self" } } } },
+			properties: { root: { $ref: "#/$defs/Self" } } }, "cyclic_schema");
+		omitted(property(Type.Tuple([Type.String(), Type.Number()])), "unsupported_keyword");
+		omitted(property(Type.Record(Type.Number(), Type.String())), "unsupported_keyword");
+		omitted(property({ type: "object", patternProperties: { "^.*$": { type: "string" } }, additionalProperties: false }), "unsupported_keyword");
+		omitted(property({ type: "object", patternProperties: { "^.*$": {} }, properties: { a: {} } }), "unsupported_keyword");
+		omitted(property({ type: "object", $defs: { Name: { type: "string" } } }), "unsupported_keyword");
+		omitted({ type: "object", $defs: {}, properties: { a: { $ref: "#/$defs/Missing" } } }, "unsupported_keyword");
+		omitted({ type: "object", $defs: { Name: { type: "string" } }, properties: { a: { $ref: "#/$defs/Name", minLength: 1 } } }, "unsupported_keyword");
+		omitted({ type: "object", $defs: { Name: { type: "string" } }, properties: { a: { $ref: "https://example.com/Name" } } }, "unsupported_keyword");
+		let invoked = 0;
+		const accessor = { type: "object", properties: { a: { $ref: "#/$defs/Name" } } };
+		Object.defineProperty(accessor, "$defs", { enumerable: true, get() { invoked++; return { Name: { type: "string" } }; } });
+		omitted(accessor, "unsupported_keyword");
+		omitted({ type: "object", $defs: new Proxy({}, { ownKeys() { invoked++; return []; } }), properties: {} }, "unsupported_keyword");
+		expect(invoked).toBe(0);
+	});
+
 	it("rejects malformed values, unsafe names and non-object roots", () => {
 		for (const value of [
 			{ enum: [] }, { enum: ["x", {}] }, { anyOf: [] }, { multipleOf: 0 }, { multipleOf: -1 },
