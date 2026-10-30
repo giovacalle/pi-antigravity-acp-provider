@@ -370,6 +370,19 @@ describe("throwaway conversations", () => {
 		expect(store.files()).toEqual(afterTurn);
 	});
 
+	it("keeps the conversation while the process outlives close()", async () => {
+		const { root, runtime, connections } = setup();
+		const store = conversationsIn(root);
+		const discovery = runtime.discoverModels("test-key");
+		const alive = vi.spyOn(connections[0]!.process, "alive", "get").mockReturnValue(true);
+		try {
+			await discovery;
+			expect(store.files()).toHaveLength(8);
+		} finally {
+			alive.mockRestore();
+		}
+	});
+
 	it("deletes nothing for a session id that is not a UUID", async () => {
 		const { root, runtime, connections } = setup();
 		const store = conversationsIn(root, "plain");
