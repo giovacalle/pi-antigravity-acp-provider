@@ -77,7 +77,7 @@ Each Pi profile stores its Google token under `$PI_CODING_AGENT_DIR/antigravity-
 
 ## Models & reasoning
 
-- Models are discovered from the ACP server and cached in Pi's model store, so newly advertised models stay selectable at startup. Starts, print mode, subagents and `/model` reuse a catalog discovered in the last 24 hours without launching agy; a stale or missing catalog is discovered again, and a failed discovery keeps the stored one. `/antigravity-acp models` forces a new discovery, for example after switching accounts.
+- Models are discovered from the ACP server and cached in Pi's model store, so newly advertised models stay selectable at startup. Starts, print mode, subagents and `/model` reuse a catalog discovered in the last 24 hours without launching agy; a stale or missing catalog is discovered again, and a failed discovery keeps the stored one. `/antigravity-acp models` forces a new discovery, for example after switching accounts. Discovery runs on a short-lived ACP process and removes the empty conversation it creates once that process exits.
 - Effort-qualified IDs are collapsed into one model entry per family; only advertised tiers are exposed via **Shift+Tab**.
 - Listing a model does not guarantee account eligibility (e.g., some Gemini 4 models require AI Ultra or eligible Enterprise plans). If a model returns `Requested entity was not found`, verify access in the official Antigravity app/CLI and select another advertised model.
 

@@ -259,16 +259,19 @@ export class AntigravityRuntime {
 		this.assertEpoch(epoch);
 		const cwd = resolveUtilityCwd();
 		const connection = this.createConnection({ cwd }, apiKey);
+		let sessionId: string | undefined;
 		try {
 			const initialize = await connection.initialize(signal);
 			this.assertEpoch(epoch);
 			await authenticateForCredential(connection, initialize, apiKey, signal);
 			this.assertEpoch(epoch);
 			const session = await connection.newSession(cwd, signal);
+			sessionId = session.sessionId;
 			this.assertEpoch(epoch);
 			return sessionModels(session)?.availableModels ?? [];
 		} finally {
 			await connection.close();
+			forgetThrowawaySession(connection, sessionId);
 		}
 	}
 
@@ -336,7 +339,7 @@ export class AntigravityRuntime {
 		} finally {
 			await connection.close();
 			// agy keeps no index and offers no delete RPC; remove the files only once the process is gone (close() can give up on a process that ignored SIGKILL).
-			if (sessionId && !connection.process.alive) removeConversation(sessionId, providerAcpDirectory());
+			forgetThrowawaySession(connection, sessionId);
 		}
 	}
 
@@ -1330,6 +1333,12 @@ function positiveInt(value: number | string | undefined, fallback: number, minim
 	if (value === undefined || value === "") return fallback;
 	const parsed = typeof value === "number" ? value : Number(value);
 	return Number.isFinite(parsed) && parsed >= minimum ? Math.floor(parsed) : fallback;
+}
+
+// agy keeps no index and offers no delete RPC, so a throwaway session's files are removed directly,
+// but only once its process is gone: close() can give up on a process that ignored SIGKILL.
+function forgetThrowawaySession(connection: AntigravityAcpConnection, sessionId: string | undefined): void {
+	if (sessionId && !connection.process.alive) removeConversation(sessionId, providerAcpDirectory());
 }
 
 async function authenticateForCredential(
