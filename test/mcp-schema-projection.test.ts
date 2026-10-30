@@ -185,6 +185,11 @@ describe("MCP schema projection", () => {
 		omitted(property({ type: "string", description: "x".repeat(70_000) }), "too_large");
 		omitted(property({ type: "string", description: "π".repeat(40_000) }), "too_large");
 		omitted(property({ type: "string", description: "\u0000".repeat(20_000) }), "too_large");
+		const $defs: Record<string, unknown> = { L0: { type: "string" } };
+		for (let level = 1; level <= 7; level++) {
+			$defs[`L${level}`] = { type: "object", properties: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`p${i}`, { $ref: `#/$defs/L${level - 1}` }])) };
+		}
+		omitted({ type: "object", $defs, properties: { r: { $ref: "#/$defs/L7" } } }, "too_large");
 		let dag: object = { type: "string" };
 		for (let i = 0; i < 16; i++) dag = { type: "object", properties: { a: dag, b: dag, c: dag, d: dag } };
 		const visits = vi.spyOn(Object, "getOwnPropertyNames");
