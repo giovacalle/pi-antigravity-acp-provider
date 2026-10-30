@@ -60,6 +60,7 @@ describe("AcpConnectionPool", () => {
 		expect(received).toEqual([]);
 		// Two updates for "hello", then the permission request and its decision update.
 		expect(pool.unknownSessionMessages).toBe(4);
+		expect(pool.snapshot()).toEqual([expect.objectContaining({ sessions: 1, created: 2, draining: false, unknownSessionUpdates: 4 })]);
 		expect(decision.stopReason).toBe("end_turn");
 	});
 
