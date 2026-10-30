@@ -1,5 +1,5 @@
 const UNIT_MS: Record<string, number> = { day: 86_400_000, hour: 3_600_000, minute: 60_000, second: 1_000 };
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 // agy replies with this fixed notice, without usage, when the account's quota is exhausted.
 const NOTICE = new RegExp(
 	"(?:^|\\n)Usage Limit Reached\\n\\nYou have reached your current quota for this period\\." +

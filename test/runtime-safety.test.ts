@@ -266,6 +266,51 @@ describe("slash commands", () => {
 	});
 });
 
+describe("live quota", () => {
+	afterEach(() => { vi.useRealTimers(); });
+
+	it("reads quota with a raw /usage prompt on its own short-lived connection", async () => {
+		const { runtime, connections, entries } = setup();
+		const quota = await runtime.quota(undefined);
+		expect(quota.groups.map((group) => group.displayName)).toEqual(["Gemini Models", "Claude and GPT models", "Gemini 4 Argon"]);
+		expect(entries().filter((entry) => entry.method === "session/prompt").map((entry) => entry.prompt))
+			.toEqual([[{ type: "text", text: "/usage" }]]);
+		await connections[0]!.process.exited;
+		expect((await runtime.snapshot()).bindings).toBe(0);
+	});
+
+	it("caches a snapshot for 60 seconds and shares one request between concurrent callers", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const { runtime, connections } = setup();
+		const [first, second] = await Promise.all([runtime.quota(undefined), runtime.quota(undefined)]);
+		expect(second).toBe(first);
+		expect(await runtime.quota(undefined)).toBe(first);
+		expect(connections).toHaveLength(1);
+
+		vi.advanceTimersByTime(61_000);
+		await runtime.quota(undefined);
+		expect(connections).toHaveLength(2);
+	});
+
+	it("does not cache a failed quota read", async () => {
+		const { runtime, connections } = setup("usage-unavailable");
+		await expect(runtime.quota(undefined)).rejects.toThrow("Unable to retrieve quota status (backend unavailable)");
+		await expect(runtime.quota(undefined)).rejects.toThrow("no quota groups");
+		expect(connections).toHaveLength(2);
+	});
+
+	it("rejects an aborted caller without cancelling the shared request", async () => {
+		const { runtime, connections } = setup();
+		const controller = new AbortController();
+		const aborted = runtime.quota(undefined, controller.signal);
+		const shared = runtime.quota(undefined);
+		controller.abort();
+		await expect(aborted).rejects.toThrow("aborted");
+		expect((await shared).groups).toHaveLength(3);
+		expect(connections).toHaveLength(1);
+	});
+});
+
 describe("session lifecycle", () => {
 	it("closes only the ending session and keeps its saved record", async () => {
 		const fixture = setup();

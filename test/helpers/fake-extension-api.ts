@@ -16,6 +16,7 @@ export interface FakeExtensionApi {
 	commands: Map<string, Command>;
 	handlers: Map<string, Handler[]>;
 	emit(type: string, payload: object, ctx: FakeContext): Promise<void>;
+	eventListeners(channel: string): number;
 }
 
 export function createFakeExtensionApi(registry: FakeProviderRegistry): FakeExtensionApi {
@@ -23,7 +24,17 @@ export function createFakeExtensionApi(registry: FakeProviderRegistry): FakeExte
 	const tools = new Map<string, Tool>();
 	const commands = new Map<string, Command>();
 	const handlers = new Map<string, Handler[]>();
+	const listeners = new Map<string, Set<(data: unknown) => void>>();
 	const api = {
+		events: {
+			on(channel: string, handler: (data: unknown) => void) {
+				listeners.set(channel, (listeners.get(channel) ?? new Set()).add(handler));
+				return () => listeners.get(channel)?.delete(handler);
+			},
+			emit(channel: string, data: unknown) {
+				for (const handler of listeners.get(channel) ?? []) handler(data);
+			},
+		},
 		registerProvider(provider: Provider) {
 			providers.push(provider);
 			registry.set(provider.id, provider);
@@ -48,6 +59,7 @@ export function createFakeExtensionApi(registry: FakeProviderRegistry): FakeExte
 		async emit(type, payload, ctx) {
 			for (const handler of handlers.get(type) ?? []) await handler({ type, ...payload }, ctx);
 		},
+		eventListeners: (channel) => listeners.get(channel)?.size ?? 0,
 	};
 }
 

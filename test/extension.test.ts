@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AntigravityAcpConnection } from "../src/acp/connection.js";
+import { QUOTA_REQUEST_CHANNEL } from "../src/constants.js";
 import { PERMISSION_TOOL_NAME } from "../src/runtime.js";
 import {
 	createFakeContext,
@@ -46,13 +47,13 @@ afterEach(async () => {
 });
 
 // Pi loads each extension instance with a fresh module graph.
-async function load(sessionId: string) {
+async function load(sessionId: string, scenario?: string) {
 	vi.resetModules();
 	const { registerAntigravityAcp } = await import("../extensions/index.js");
 	const pi = createFakeExtensionApi(registry);
 	registerAntigravityAcp(pi.api, (options) => {
 		const connection = new AntigravityAcpConnection({ ...options, command: process.execPath,
-			args: [fakeAgent], env: { ...process.env, FAKE_AGENT_LOG_FILE: log } });
+			args: [fakeAgent, ...(scenario ? [scenario] : [])], env: { ...process.env, FAKE_AGENT_LOG_FILE: log } });
 		connections.push(connection);
 		return connection;
 	});
@@ -155,5 +156,57 @@ describe("extension entry point", () => {
 		expect(ctx.ui.notify.mock.calls.at(-1)![0]).toContain(
 			"Usage this process: turns=1 tokens=1200 input=600 output=200 reasoning=50 cacheRead=400",
 		);
+	});
+
+	it("shows the live quota above the process totals", async () => {
+		const { pi, ctx } = await load("parent");
+		await pi.commands.get("antigravity-acp")!.handler("quota", ctx as never);
+		const text = ctx.ui.notify.mock.calls.at(-1)![0] as string;
+		expect(text).toContain("Gemini Models: weekly 81% (resets 2026-10-30T22:21:00.000Z), 5h 98% (resets 2026-10-30T04:10:00.000Z)");
+		expect(text).toContain("Usage this process: turns=0");
+		expect(text).not.toContain("not supplied");
+	});
+
+	it("shows why the live quota is unavailable", async () => {
+		const { pi, ctx } = await load("parent", "usage-unavailable");
+		await pi.commands.get("antigravity-acp")!.handler("quota", ctx as never);
+		expect(ctx.ui.notify.mock.calls.at(-1)![0]).toContain("Antigravity quota: unavailable (");
+	});
+});
+
+describe("quota request channel", () => {
+	it("replies once with the live quota snapshot", async () => {
+		const { pi } = await load("parent");
+		const reply = vi.fn();
+		pi.api.events.emit(QUOTA_REQUEST_CHANNEL, { reply });
+		await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+		expect(reply).toHaveBeenCalledOnce();
+		expect(reply).toHaveBeenCalledWith({ ok: true, quota: expect.objectContaining({
+			groups: expect.arrayContaining([expect.objectContaining({ displayName: "Gemini Models" })]),
+		}) });
+	});
+
+	it("replies once with an error when the quota cannot be read", async () => {
+		const { pi } = await load("parent", "usage-unavailable");
+		const reply = vi.fn(() => { throw new Error("listener failed"); });
+		pi.api.events.emit(QUOTA_REQUEST_CHANNEL, { reply });
+		await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(reply).toHaveBeenCalledOnce();
+		expect(reply).toHaveBeenCalledWith({ ok: false, error: expect.stringContaining("Unable to retrieve quota status") });
+	});
+
+	it("ignores requests without a reply function", async () => {
+		const { pi } = await load("parent");
+		pi.api.events.emit(QUOTA_REQUEST_CHANNEL, undefined);
+		pi.api.events.emit(QUOTA_REQUEST_CHANNEL, { reply: "no" });
+		expect(connections).toHaveLength(0);
+	});
+
+	it("stops listening on session shutdown", async () => {
+		const { pi } = await load("parent");
+		expect(pi.eventListeners(QUOTA_REQUEST_CHANNEL)).toBe(1);
+		for (const { pi: instance, ctx } of loaded.splice(0)) await instance.emit("session_shutdown", { reason: "quit" }, ctx);
+		expect(pi.eventListeners(QUOTA_REQUEST_CHANNEL)).toBe(0);
 	});
 });

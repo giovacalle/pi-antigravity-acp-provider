@@ -191,7 +191,11 @@ for await (const line of rl) {
 		const slash = joined === "/logout" ? "logout" : /^\/usage(?:\s|$)/iu.test(joined) ? "usage"
 			: params.prompt.some((block) => block.type === "text" && /(?:\s|^)\/plan(?:\s|$)/u.test(block.text)) ? "plan" : undefined;
 		if (slash) {
-			send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Intercepted /${slash}` } } } });
+			const reply = slash !== "usage" ? `Intercepted /${slash}`
+				: scenario === "usage-unavailable"
+					? "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- Unable to retrieve quota status (backend unavailable)"
+					: fs.readFileSync(new URL("./usage-reply.md", import.meta.url), "utf8");
+			send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: reply } } } });
 			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
 			continue;
 		}
