@@ -67,6 +67,23 @@ export function resolveAntigravityAcpDirectory(env: NodeJS.ProcessEnv = process.
 	return path.join(base, "antigravity-acp");
 }
 
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/** Best-effort removal of the conversation store agy writes for one session:
+ * `conversations/<id>.db`, `.db-shm`, `.db-wal` and `.meta`. Only for a session
+ * this provider created and whose process has exited; any id that is not a
+ * strict UUID is ignored so the path can never leave that directory. */
+export function removeConversation(sessionId: string, directory = resolveAntigravityAcpDirectory()): void {
+	if (!SESSION_ID.test(sessionId)) return;
+	for (const suffix of [".db", ".db-shm", ".db-wal", ".meta"]) {
+		try {
+			fs.rmSync(path.join(directory, "conversations", sessionId + suffix), { force: true });
+		} catch {
+			// Best effort: a locked or unexpected entry stays in place.
+		}
+	}
+}
+
 /** Structural local health only. A network probe is required to call an OAuth
  * token valid; secret values are never returned or logged. `env` is the
  * environment whose credentials are inspected, not necessarily this process's. */

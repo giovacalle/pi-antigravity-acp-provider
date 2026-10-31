@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import readline from "node:readline";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -130,12 +132,21 @@ for await (const line of rl) {
 			});
 			continue;
 		}
+		// agy writes a conversation store per new session; opt-in, and only under an explicit GEMINI_HOME.
+		const conversations = process.env.FAKE_AGENT_CONVERSATIONS && process.env.GEMINI_HOME?.trim()
+			? path.join(process.env.GEMINI_HOME, "antigravity-acp", "conversations") : undefined;
+		const sessionId = conversations && process.env.FAKE_AGENT_CONVERSATIONS === "uuid" ? randomUUID() : "fake-session";
+		if (conversations) {
+			fs.mkdirSync(conversations, { recursive: true });
+			for (const suffix of [".db", ".db-shm", ".db-wal"]) fs.writeFileSync(path.join(conversations, sessionId + suffix), "");
+			fs.writeFileSync(path.join(conversations, `${sessionId}.meta`), JSON.stringify({ cwd: params.cwd }));
+		}
 		mcpServer = params.mcpServers?.find((server) => server.type === "http");
 		send({
 			jsonrpc: "2.0",
 			id,
-			result: modern ? { sessionId: "fake-session", configOptions: sessionConfigOptions() } : {
-				sessionId: "fake-session",
+			result: modern ? { sessionId, configOptions: sessionConfigOptions() } : {
+				sessionId,
 				modes: sessionModes(),
 				models: {
 					currentModelId: model,
