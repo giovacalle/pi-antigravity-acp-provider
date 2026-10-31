@@ -9,6 +9,7 @@ import { AntigravityAcpConnection } from "../src/acp/connection.js";
 import { AcpSessionStore } from "../src/acp/session-store.js";
 import { AntigravityRuntime, PERMISSION_TOOL_NAME, PERMISSION_RESULT_KIND } from "../src/runtime.js";
 import type { PermissionMode } from "../src/config.js";
+import type { AntigravityQuotaSnapshot } from "../src/acp/usage-quota.js";
 import type { PiEventWriter } from "../src/stream/pi-events.js";
 import { piToolFingerprint, PiMcpBridge } from "../src/mcp/bridge.js";
 
@@ -348,6 +349,36 @@ describe("live quota", () => {
 		vi.advanceTimersByTime(61_000);
 		await runtime.quota(undefined);
 		expect(connections).toHaveLength(2);
+	});
+
+	it("drops the cached snapshot on logout", async () => {
+		const { root, runtime, connections } = setup();
+		vi.stubEnv("GEMINI_HOME", path.join(root, "gemini"));
+		try {
+			await runtime.quota(undefined);
+			await runtime.logout();
+			await runtime.quota(undefined);
+			expect(connections).toHaveLength(2);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("does not populate the cache if logout occurs while a quota read is in flight", async () => {
+		const { root, runtime } = setup();
+		vi.stubEnv("GEMINI_HOME", path.join(root, "gemini"));
+		try {
+			let resolveQuota!: (snapshot: AntigravityQuotaSnapshot) => void;
+			const pendingSnapshot = new Promise<AntigravityQuotaSnapshot>((resolve) => { resolveQuota = resolve; });
+			vi.spyOn(runtime as unknown as { fetchQuota: () => Promise<AntigravityQuotaSnapshot> }, "fetchQuota").mockReturnValue(pendingSnapshot);
+			const quotaPromise = runtime.quota(undefined);
+			await runtime.logout();
+			resolveQuota({ at: Date.now(), groups: [] });
+			await quotaPromise;
+			expect((runtime as unknown as { quotaCache: unknown }).quotaCache).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("does not cache a failed quota read", async () => {

@@ -217,8 +217,12 @@ export class AntigravityRuntime {
 	async quota(apiKey: string | undefined, signal?: AbortSignal): Promise<AntigravityQuotaSnapshot> {
 		if (signal?.aborted) throw abortError();
 		if (this.quotaCache && Date.now() - this.quotaCache.at < QUOTA_CACHE_MS) return this.quotaCache;
+		const epoch = this.bindingEpoch;
 		this.quotaInFlight ??= this.fetchQuota(apiKey)
-			.then((snapshot) => (this.quotaCache = snapshot))
+			.then((snapshot) => {
+				if (this.bindingEpoch === epoch) this.quotaCache = snapshot;
+				return snapshot;
+			})
 			.finally(() => { this.quotaInFlight = undefined; });
 		const shared = this.quotaInFlight;
 		if (!signal) return shared;
@@ -363,6 +367,7 @@ export class AntigravityRuntime {
 
 	async logout(): Promise<void> {
 		await this.closeBindings();
+		this.quotaCache = undefined;
 		this.sessionStore?.clear();
 		clearAntigravityCredentials();
 	}

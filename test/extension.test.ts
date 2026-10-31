@@ -87,6 +87,23 @@ describe("antigravity-acp extension", () => {
 		expect(notify.mock.calls[0]![0]).not.toContain("not supplied");
 	});
 
+	it("labels groups without percentages as no percentage limits reported", async () => {
+		const snapshot = {
+			at: now,
+			groups: [{ displayName: "Other", buckets: [] }],
+		};
+		vi.spyOn(AntigravityRuntime.prototype, "quota").mockResolvedValue(snapshot);
+
+		antigravityAcpExtension(pi);
+		const cmd = commands.get("antigravity-acp");
+		await cmd!.handler("quota", ctx);
+
+		expect(notify).toHaveBeenCalledWith(
+			expect.stringContaining("Other: no percentage limits reported"),
+			"info",
+		);
+	});
+
 	it("shows why the live quota is unavailable", async () => {
 		vi.spyOn(AntigravityRuntime.prototype, "quota").mockRejectedValue(
 			new AntigravityAcpError("protocol", "Antigravity /usage reply had no quota groups: Unable to retrieve quota status (backend unavailable)"),
