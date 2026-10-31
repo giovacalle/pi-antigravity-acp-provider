@@ -102,6 +102,14 @@ On first use of a custom profile without a config, existing permission/update se
 
 `logout`/`account` clears local Antigravity credentials and saved ACP sessions. Run Pi's `/logout` afterward to remove the Pi credential marker, then `/login` for the new account. `update` checks the official registry and installs its newest release only after matching it to the provider's signed runtime catalog. See [`docs/RUNTIME-UPDATES.md`](docs/RUNTIME-UPDATES.md).
 
+`quota` shows each Antigravity quota group with the remaining percentage and UTC reset time of each limit, then this Pi process's token totals. The provider reads the quota by sending Antigravity's own `/usage` command to a separate short-lived ACP process, which runs no model turn and never touches a conversation; the result is cached for 60 seconds. Other Pi extensions can request the same snapshot:
+
+```ts
+pi.events.emit("antigravity-acp:quota:request", { reply: (result) => { /* ... */ } });
+```
+
+`reply` is called exactly once, with `{ ok: true, quota }` or `{ ok: false, error }`. `quota` is an `AntigravityQuotaSnapshot`, exported as a type by the package: `{ at: number; groups: { displayName: string; buckets: { window: string; remainingFraction: number; resetTime?: string }[] }[] }`. `at` is the read time in epoch milliseconds, `window` is `weekly`, `5h`, or the server's label for any other limit, `remainingFraction` has 1% precision, and `resetTime` is ISO 8601 at minute precision.
+
 ## Development
 
 ```bash

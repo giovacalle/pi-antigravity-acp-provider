@@ -15,7 +15,7 @@ The bundled Gemini CLI implementation was superseded after its individual Code A
 - Antigravity fallback models, authenticated ACP model discovery, catalog refresh, and `session/set_model` switching.
 - Pi-to-ACP text/image/context conversion with bounded fresh-session reconstruction.
 - ACP text, thought, plan, and native-tool activity mapping to balanced Pi events.
-- ACP usage/quota metadata mapping to Pi usage and `/antigravity-acp quota` process metrics.
+- ACP usage/quota metadata mapping to Pi usage, and `/antigravity-acp quota` showing the live `/usage` quota plus process metrics.
 - Persistent ACP bindings keyed by Pi session ID, serialized turns, on-disk restoration through `session/resume`/`session/load`, reconstruction fallback, rewind detection, and cleanup.
 - Persisted Antigravity permission modes (`default`, `auto_edit`, and `yolo`), with `yolo` as the requested default. Prompting modes retain single-use, fail-closed ACP permission continuation through a real Pi tool round trip.
 - Authenticated loopback MCP exposure of active Pi tools with `pi_` namespacing, schema sanitization, original-schema revalidation, bounded catalogs/bodies, and genuine Pi tool-result continuation.
