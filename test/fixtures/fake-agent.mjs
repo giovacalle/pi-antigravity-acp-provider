@@ -242,6 +242,23 @@ for await (const line of rl) {
 			});
 			continue;
 		}
+		if (scenario === "quota-exhausted") {
+			// agy reports exhaustion as a plain reply: no usage, and `refusal` when the SDK flags it.
+			const reset = text.includes("absolute") ? " Your limit will reset on Oct 2, 2026 14:00 UTC."
+				: text.includes("no reset") ? "" : " Your limit will reset in 3 hours, 51 minutes.";
+			send({
+				jsonrpc: "2.0",
+				method: "session/update",
+				params: {
+					sessionId: params.sessionId,
+					update: { sessionUpdate: "agent_message_chunk", content: { type: "text",
+						text: `Usage Limit Reached\n\nYou have reached your current quota for this period.${reset}` } },
+				},
+			});
+			send({ jsonrpc: "2.0", id, result: { stopReason: text.includes("refusal") ? "refusal" : "end_turn",
+				...(text.includes("refusal") || text.includes("quoted") ? { usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } } : {}) } });
+			continue;
+		}
 		if (!continuing && text.includes("hang")) {
 			hangingPromptId = id;
 			continue;

@@ -3,6 +3,7 @@ export type AntigravityAcpErrorCode =
 	| "auth"
 	| "model"
 	| "protocol"
+	| "quota"
 	| "spawn"
 	| "timeout"
 	| "process_exit"
