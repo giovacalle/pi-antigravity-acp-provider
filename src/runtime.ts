@@ -27,6 +27,7 @@ import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./a
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
 import { AcpSessionStore } from "./acp/session-store.js";
 import { sessionModels, sessionModes, type AcpModelInfo, type AcpNewSessionResponse, type SessionState } from "./acp/session-state.js";
+import { parseUsageQuota, type AntigravityQuotaSnapshot } from "./acp/usage-quota.js";
 import {
 	MANAGED_AUTH_MARKER,
 	PERMISSION_RESULT_KIND,
@@ -52,6 +53,8 @@ import { RuntimeMetrics } from "./status.js";
 
 const PERMISSION_TIMEOUT_MS = 120_000;
 const TOOL_BATCH_MS = 100;
+const QUOTA_CACHE_MS = 60_000;
+const QUOTA_TIMEOUT_MS = 30_000;
 
 type AntigravityModel = Model<"antigravity-acp">;
 
@@ -154,6 +157,8 @@ export class AntigravityRuntime {
 	private readonly sessionStore: AcpSessionStore | undefined;
 	private readonly metrics = new RuntimeMetrics();
 	private permissionMode: PermissionMode;
+	private quotaCache: AntigravityQuotaSnapshot | undefined;
+	private quotaInFlight: Promise<AntigravityQuotaSnapshot> | undefined;
 
 	constructor(
 		connectionFactory?: AntigravityConnectionFactory,
@@ -203,6 +208,56 @@ export class AntigravityRuntime {
 			const session = await connection.newSession(process.cwd(), signal);
 			this.assertEpoch(epoch);
 			return sessionModels(session)?.availableModels ?? [];
+		} finally {
+			await connection.close();
+		}
+	}
+
+	/** Live quota from agy's own `/usage`, which answers without model inference. */
+	async quota(apiKey: string | undefined, signal?: AbortSignal): Promise<AntigravityQuotaSnapshot> {
+		if (signal?.aborted) throw abortError();
+		if (this.quotaCache && Date.now() - this.quotaCache.at < QUOTA_CACHE_MS) return this.quotaCache;
+		this.quotaInFlight ??= this.fetchQuota(apiKey)
+			.then((snapshot) => (this.quotaCache = snapshot))
+			.finally(() => { this.quotaInFlight = undefined; });
+		const shared = this.quotaInFlight;
+		if (!signal) return shared;
+		// One caller's abort must not cancel the request other callers share.
+		return new Promise((resolve, reject) => {
+			const onAbort = () => reject(abortError());
+			signal.addEventListener("abort", onAbort, { once: true });
+			shared.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+		});
+	}
+
+	// A separate short-lived process, never a user's warm session, so `/usage` cannot race user turns.
+	private async fetchQuota(apiKey: string | undefined): Promise<AntigravityQuotaSnapshot> {
+		this.assertActive();
+		const epoch = this.bindingEpoch;
+		if (this.ensureAgent) await ensureAntigravityAcpReady();
+		this.assertEpoch(epoch);
+		let sessionId: string | undefined;
+		let text = "";
+		const connection = this.createConnection({
+			cwd: process.cwd(),
+			promptIdleTimeoutMs: QUOTA_TIMEOUT_MS,
+			handlers: {
+				onUpdate: ({ sessionId: id, update }) => {
+					if (id === sessionId && update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") text += update.content.text;
+				},
+				onPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+			},
+		});
+		try {
+			const initialize = await connection.initialize();
+			this.assertEpoch(epoch);
+			await authenticateForCredential(connection, initialize, apiKey);
+			this.assertEpoch(epoch);
+			sessionId = (await connection.newSession(process.cwd())).sessionId;
+			this.assertEpoch(epoch);
+			// agy answers a bare "/usage" text block itself: no model turn, no quota spent.
+			await connection.prompt({ sessionId, prompt: [{ type: "text", text: "/usage" }] });
+			return parseUsageQuota(text);
 		} finally {
 			await connection.close();
 		}
