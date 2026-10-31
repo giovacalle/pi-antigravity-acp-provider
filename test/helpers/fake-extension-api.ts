@@ -6,6 +6,7 @@ import { vi } from "vitest";
 export type FakeProviderRegistry = Map<string, Provider>;
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
+type EventListener = (data: unknown) => void;
 type Tool = Parameters<ExtensionAPI["registerTool"]>[0];
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
 
@@ -15,6 +16,7 @@ export interface FakeExtensionApi {
 	tools: Map<string, Tool>;
 	commands: Map<string, Command>;
 	handlers: Map<string, Handler[]>;
+	listeners: Map<string, EventListener[]>;
 	emit(type: string, payload: object, ctx: FakeContext): Promise<void>;
 }
 
@@ -23,6 +25,7 @@ export function createFakeExtensionApi(registry: FakeProviderRegistry): FakeExte
 	const tools = new Map<string, Tool>();
 	const commands = new Map<string, Command>();
 	const handlers = new Map<string, Handler[]>();
+	const listeners = new Map<string, EventListener[]>();
 	const api = {
 		registerProvider(provider: Provider) {
 			providers.push(provider);
@@ -38,6 +41,15 @@ export function createFakeExtensionApi(registry: FakeProviderRegistry): FakeExte
 			handlers.set(type, [...(handlers.get(type) ?? []), handler]);
 			return () => handlers.set(type, (handlers.get(type) ?? []).filter((item) => item !== handler));
 		},
+		events: {
+			on(channel: string, handler: EventListener) {
+				listeners.set(channel, [...(listeners.get(channel) ?? []), handler]);
+				return () => listeners.set(channel, (listeners.get(channel) ?? []).filter((item) => item !== handler));
+			},
+			emit(channel: string, data: unknown) {
+				for (const handler of [...(listeners.get(channel) ?? [])]) handler(data);
+			},
+		},
 	};
 	return {
 		api: api as unknown as ExtensionAPI,
@@ -45,6 +57,7 @@ export function createFakeExtensionApi(registry: FakeProviderRegistry): FakeExte
 		tools,
 		commands,
 		handlers,
+		listeners,
 		async emit(type, payload, ctx) {
 			for (const handler of handlers.get(type) ?? []) await handler({ type, ...payload }, ctx);
 		},
