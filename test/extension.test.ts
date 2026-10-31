@@ -185,6 +185,22 @@ describe("live quota", () => {
 		expect(ctx.ui.notify.mock.calls[0]![0]).not.toContain("not supplied");
 	});
 
+	it("labels groups without percentages as no percentage limits reported", async () => {
+		const snapshot = {
+			at: now,
+			groups: [{ displayName: "Other", buckets: [] }],
+		};
+		const { pi, ctx } = await load("a");
+		(await spyQuota()).mockResolvedValue(snapshot);
+
+		await pi.commands.get("antigravity-acp")!.handler("quota", ctx as never);
+
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("Other: no percentage limits reported"),
+			"info",
+		);
+	});
+
 	it("shows why the live quota is unavailable", async () => {
 		const { pi, ctx } = await load("a");
 		(await spyQuota()).mockRejectedValue(
