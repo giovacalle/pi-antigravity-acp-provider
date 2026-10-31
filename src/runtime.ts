@@ -25,6 +25,7 @@ import {
 } from "./acp/antigravity.js";
 import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./acp/connection.js";
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
+import { quotaExhaustion } from "./acp/quota.js";
 import { AcpSessionStore } from "./acp/session-store.js";
 import { sessionModels, sessionModes, type AcpModelInfo, type AcpNewSessionResponse, type SessionState } from "./acp/session-state.js";
 import {
@@ -559,6 +560,14 @@ export class AntigravityRuntime {
 			const usage = usageFromPrompt(response);
 			activeWriter.message.usage = usage;
 			this.metrics.record(response, usage);
+			// agy reports exhaustion as an ordinary reply; fail it before the turn is persisted.
+			const quota = usage.totalTokens === 0 || response.stopReason === "refusal"
+				? quotaExhaustion(activeWriter.message.content.map((block) => block.type === "text" ? block.text : "").join(""))
+				: undefined;
+			if (quota) {
+				throw new AntigravityAcpError("quota",
+					`Antigravity quota exceeded for ${binding.modelId}.${quota.resetAt ? ` Resets at ${quota.resetAt}.` : ""}`);
+			}
 			activeWriter.message.rawStopReason = response.stopReason;
 			binding.messageCount = binding.pendingContextCount || parts.messageCount;
 			binding.historyFingerprint = binding.pendingContextFingerprint;
