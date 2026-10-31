@@ -399,3 +399,50 @@ describe("live quota", () => {
 		expect(connections).toHaveLength(1);
 	});
 });
+
+describe("throwaway conversations", () => {
+	const userSid = "0f8fad5b-d9cb-469f-a165-70867728950e";
+	function conversationsIn(root: string, sids: "uuid" | "plain" = "uuid") {
+		const acp = path.join(root, "gemini", "antigravity-acp");
+		const conversations = path.join(acp, "conversations");
+		fs.mkdirSync(conversations, { recursive: true });
+		for (const suffix of [".db", ".db-shm", ".db-wal", ".meta"]) fs.writeFileSync(path.join(conversations, userSid + suffix), "user");
+		fs.writeFileSync(path.join(acp, "acp_token.json"), "{}");
+		vi.stubEnv("GEMINI_HOME", path.join(root, "gemini"));
+		vi.stubEnv("FAKE_AGENT_CONVERSATIONS", sids);
+		return {
+			files: () => fs.readdirSync(conversations).sort(),
+			token: () => fs.existsSync(path.join(acp, "acp_token.json")),
+		};
+	}
+	const userFiles = [".db", ".db-shm", ".db-wal", ".meta"].map((suffix) => userSid + suffix).sort();
+	afterEach(() => { vi.unstubAllEnvs(); });
+
+	it("removes the conversation a quota read creates and nothing else", async () => {
+		const { root, runtime, connections } = setup();
+		const store = conversationsIn(root);
+		expect((await runtime.quota(undefined)).groups).toHaveLength(3);
+		await connections[0]!.process.exited;
+		expect(store.files()).toEqual(userFiles);
+		expect(store.token()).toBe(true);
+	});
+
+	it("keeps the conversation of a user turn", async () => {
+		const { root, runtime, connections } = setup();
+		const store = conversationsIn(root);
+		expect((await turn(runtime, [user("hello")])).stopReason).toBe("stop");
+		const afterTurn = store.files();
+		expect(afterTurn).toHaveLength(8);
+		await runtime.quota(undefined);
+		await connections.at(-1)!.process.exited;
+		expect(store.files()).toEqual(afterTurn);
+	});
+
+	it("deletes nothing for a session id that is not a UUID", async () => {
+		const { root, runtime, connections } = setup();
+		const store = conversationsIn(root, "plain");
+		await runtime.quota(undefined);
+		await connections[0]!.process.exited;
+		expect(store.files()).toEqual([...userFiles, "fake-session.db", "fake-session.db-shm", "fake-session.db-wal", "fake-session.meta"].sort());
+	});
+});

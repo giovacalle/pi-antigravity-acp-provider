@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	clearAntigravityCredentials,
 	inspectAntigravityAuth,
+	removeConversation,
 	resolveAntigravityAcpDirectory,
 } from "../src/acp/antigravity.js";
 
@@ -85,5 +86,35 @@ describe("Antigravity auth health", () => {
 		fs.writeFileSync(path.join(directory, "acp_token.json"), '{"refresh_token":"secret"}');
 		expect(inspectAntigravityAuth(directory, { GEMINI_API_KEY: "child-key" }).status).toBe("api-key-env");
 		expect(inspectAntigravityAuth(directory, {}).status).toBe("oauth-refreshable");
+	});
+});
+
+describe("removeConversation", () => {
+	const sid = "0f8fad5b-d9cb-469f-a165-70867728950e";
+	function conversations(names: string[]) {
+		const directory = root();
+		const dir = path.join(directory, "conversations");
+		fs.mkdirSync(dir);
+		for (const name of names) fs.writeFileSync(path.join(dir, name), "");
+		return { directory, files: () => fs.readdirSync(dir).sort() };
+	}
+
+	it("removes exactly the four files of a UUID session", () => {
+		const store = conversations([".db", ".db-shm", ".db-wal", ".meta", "-other.db"].map((suffix) => sid + suffix));
+		removeConversation(sid, store.directory);
+		expect(store.files()).toEqual([`${sid}-other.db`]);
+	});
+
+	it.each(["../x", "", `${sid.toUpperCase()}/x`, `../${sid}`])("ignores a session id that is not a UUID: %j", (id) => {
+		const store = conversations([`${sid}.db`, "x.db"]);
+		removeConversation(id, store.directory);
+		expect(store.files()).toEqual([`${sid}.db`, "x.db"]);
+	});
+
+	it("skips a session path that is a directory without throwing", () => {
+		const store = conversations([`${sid}.meta`]);
+		fs.mkdirSync(path.join(store.directory, "conversations", `${sid}.db`));
+		expect(() => removeConversation(sid, store.directory)).not.toThrow();
+		expect(store.files()).toEqual([`${sid}.db`]);
 	});
 });

@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import {
 	clearAntigravityCredentials,
 	inspectAntigravityAuth,
+	removeConversation,
 	type AntigravityAuthHealth,
 } from "./acp/antigravity.js";
 import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./acp/connection.js";
@@ -264,6 +265,8 @@ export class AntigravityRuntime {
 			return parseUsageQuota(text);
 		} finally {
 			await connection.close();
+			// agy keeps no index and offers no delete RPC; remove the files only once the process is gone (close() can give up on a process that ignored SIGKILL).
+			if (sessionId && !connection.process.alive) removeConversation(sessionId);
 		}
 	}
 
