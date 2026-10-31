@@ -11,6 +11,7 @@ import { AcpSessionStore } from "../src/acp/session-store.js";
 import { AntigravityRuntime, PERMISSION_TOOL_NAME, PERMISSION_RESULT_KIND } from "../src/runtime.js";
 import type { NativeTools, PermissionMode } from "../src/config.js";
 import type { PiEventWriter } from "../src/stream/pi-events.js";
+import type { AntigravityQuotaSnapshot } from "../src/acp/usage-quota.js";
 import { piToolFingerprint, PiMcpBridge } from "../src/mcp/bridge.js";
 
 const fakeAgent = fileURLToPath(new URL("./fixtures/fake-agent.mjs", import.meta.url));
@@ -300,6 +301,23 @@ describe("live quota", () => {
 			await runtime.logout();
 			await runtime.quota(undefined);
 			expect(connections).toHaveLength(2);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("does not populate the cache if logout occurs while a quota read is in flight", async () => {
+		const { root, runtime } = setup();
+		vi.stubEnv("GEMINI_HOME", path.join(root, "gemini"));
+		try {
+			let resolveQuota!: (snapshot: AntigravityQuotaSnapshot) => void;
+			const pendingSnapshot = new Promise<AntigravityQuotaSnapshot>((resolve) => { resolveQuota = resolve; });
+			vi.spyOn(runtime as unknown as { fetchQuota: () => Promise<AntigravityQuotaSnapshot> }, "fetchQuota").mockReturnValue(pendingSnapshot);
+			const quotaPromise = runtime.quota(undefined);
+			await runtime.logout();
+			resolveQuota({ at: Date.now(), groups: [] });
+			await quotaPromise;
+			expect((runtime as unknown as { quotaCache: unknown }).quotaCache).toBeUndefined();
 		} finally {
 			vi.unstubAllEnvs();
 		}

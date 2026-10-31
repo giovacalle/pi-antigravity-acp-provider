@@ -302,8 +302,12 @@ export class AntigravityRuntime {
 	async quota(apiKey: string | undefined, signal?: AbortSignal): Promise<AntigravityQuotaSnapshot> {
 		if (signal?.aborted) throw abortError();
 		if (this.quotaCache && Date.now() - this.quotaCache.at < QUOTA_CACHE_MS) return this.quotaCache;
+		const epoch = this.bindingEpoch;
 		this.quotaInFlight ??= this.fetchQuota(apiKey)
-			.then((snapshot) => (this.quotaCache = snapshot))
+			.then((snapshot) => {
+				if (this.bindingEpoch === epoch) this.quotaCache = snapshot;
+				return snapshot;
+			})
 			.finally(() => { this.quotaInFlight = undefined; });
 		return waitUnlessAborted(this.quotaInFlight, signal);
 	}
