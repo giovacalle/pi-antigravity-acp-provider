@@ -515,6 +515,29 @@ describe("live quota", () => {
 		expect((await shared).groups).toHaveLength(3);
 		expect(connections).toHaveLength(1);
 	});
+
+	it("rejects a cached quota read after close", async () => {
+		const { runtime } = setup();
+		vi.spyOn(runtime as unknown as { fetchQuota: () => Promise<AntigravityQuotaSnapshot> }, "fetchQuota")
+			.mockResolvedValue({ at: Date.now(), groups: [] });
+		await runtime.quota(undefined);
+		await runtime.close();
+		await expect(runtime.quota(undefined)).rejects.toThrow("closed");
+	});
+
+	it("rejects a quota read that would join an in-flight request after close", async () => {
+		const { runtime } = setup();
+		let resolveQuota!: (snapshot: AntigravityQuotaSnapshot) => void;
+		const pending = new Promise<AntigravityQuotaSnapshot>((resolve) => { resolveQuota = resolve; });
+		const fetchQuota = vi.spyOn(runtime as unknown as { fetchQuota: () => Promise<AntigravityQuotaSnapshot> }, "fetchQuota")
+			.mockReturnValue(pending);
+		const first = runtime.quota(undefined);
+		await runtime.close();
+		await expect(runtime.quota(undefined)).rejects.toThrow("closed");
+		resolveQuota({ at: Date.now(), groups: [] });
+		await first.catch(() => undefined);
+		expect(fetchQuota).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe("throwaway conversations", () => {

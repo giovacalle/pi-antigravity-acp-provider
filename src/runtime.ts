@@ -220,6 +220,7 @@ export class AntigravityRuntime {
 
 	/** Live quota from agy's own `/usage`, which answers without model inference. */
 	async quota(apiKey: string | undefined, signal?: AbortSignal): Promise<AntigravityQuotaSnapshot> {
+		this.assertActive();
 		if (signal?.aborted) throw abortError();
 		if (this.quotaCache && Date.now() - this.quotaCache.at < QUOTA_CACHE_MS) return this.quotaCache;
 		const epoch = this.bindingEpoch;
