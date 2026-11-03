@@ -117,11 +117,14 @@ describe("context size from usage_update", () => {
 
 	it("removes the double-counted cache read on a single-inference prompt", async () => {
 		const { runtime } = setup();
-		const message = await turn(runtime, [user("usage single")]);
-		expect(message.usage).toMatchObject({ input: 600, cacheRead: 400, totalTokens: 1200 });
+		const first = await turn(runtime, [user("usage single")]);
+		expect(first.usage).toMatchObject({ input: 600, cacheRead: 400, totalTokens: 1200 });
+		const second = await turn(runtime, [user("usage single"), first, user("usage single", 3)]);
+		expect(second.usage).toMatchObject({ input: 600, cacheRead: 400, totalTokens: 1200 });
 	});
 
 	it("keeps the prompt response usage when the agent sends no usage_update", async () => {
+		// Reuses the quota fixture's "quoted" reply only because it carries prompt usage without a usage_update.
 		const { runtime } = setup("quota-exhausted");
 		const message = await turn(runtime, [user("quoted")], "quota");
 		expect(message.usage).toMatchObject({ input: 10, output: 5, totalTokens: 15 });
