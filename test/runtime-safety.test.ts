@@ -761,6 +761,35 @@ describe("live quota", () => {
 		await first.catch(() => undefined);
 		expect(fetchQuota).toHaveBeenCalledTimes(1);
 	});
+
+	it("starts a fresh quota read after logout while the old one is still in flight", async () => {
+		const { root, runtime } = setup();
+		vi.stubEnv("GEMINI_HOME", path.join(root, "gemini"));
+		try {
+			let resolveOld!: (snapshot: AntigravityQuotaSnapshot) => void;
+			let resolveNew!: (snapshot: AntigravityQuotaSnapshot) => void;
+			const oldPromise = new Promise<AntigravityQuotaSnapshot>((resolve) => { resolveOld = resolve; });
+			const newPromise = new Promise<AntigravityQuotaSnapshot>((resolve) => { resolveNew = resolve; });
+			const fetchQuota = vi.spyOn(runtime as unknown as { fetchQuota: () => Promise<AntigravityQuotaSnapshot> }, "fetchQuota")
+				.mockReturnValueOnce(oldPromise)
+				.mockReturnValueOnce(newPromise);
+
+			const old = runtime.quota(undefined);
+			await runtime.logout();
+			const fresh = runtime.quota(undefined);
+			resolveOld({ at: 1, groups: [] });
+			await old;
+			const third = runtime.quota(undefined);
+			resolveNew({ at: 2, groups: [{ displayName: "fresh", buckets: [] }] });
+
+			expect((await fresh).at).toBe(2);
+			expect((await third).at).toBe(2);
+			expect(fetchQuota).toHaveBeenCalledTimes(2);
+			expect((runtime as unknown as { quotaCache?: AntigravityQuotaSnapshot }).quotaCache?.at).toBe(2);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
 });
 
 describe("throwaway conversations", () => {
