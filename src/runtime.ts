@@ -163,7 +163,7 @@ export class AntigravityRuntime {
 	private readonly metrics = new RuntimeMetrics();
 	private permissionMode: PermissionMode;
 	private quotaCache: AntigravityQuotaSnapshot | undefined;
-	private quotaInFlight: Promise<AntigravityQuotaSnapshot> | undefined;
+	private quotaInFlight: { epoch: number; snapshot: Promise<AntigravityQuotaSnapshot> } | undefined;
 
 	constructor(
 		connectionFactory?: AntigravityConnectionFactory,
@@ -224,13 +224,19 @@ export class AntigravityRuntime {
 		if (signal?.aborted) throw abortError();
 		if (this.quotaCache && Date.now() - this.quotaCache.at < QUOTA_CACHE_MS) return this.quotaCache;
 		const epoch = this.bindingEpoch;
-		this.quotaInFlight ??= this.fetchQuota(apiKey)
-			.then((snapshot) => {
-				if (this.bindingEpoch === epoch) this.quotaCache = snapshot;
-				return snapshot;
-			})
-			.finally(() => { this.quotaInFlight = undefined; });
-		const shared = this.quotaInFlight;
+		if (this.quotaInFlight?.epoch !== epoch) {
+			const request = {
+				epoch,
+				snapshot: this.fetchQuota(apiKey)
+					.then((snapshot) => {
+						if (this.bindingEpoch === epoch) this.quotaCache = snapshot;
+						return snapshot;
+					})
+					.finally(() => { if (this.quotaInFlight === request) this.quotaInFlight = undefined; }),
+			};
+			this.quotaInFlight = request;
+		}
+		const shared = this.quotaInFlight.snapshot;
 		if (!signal) return shared;
 		// One caller's abort must not cancel the request other callers share.
 		return new Promise((resolve, reject) => {
