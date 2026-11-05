@@ -25,7 +25,7 @@ let root: string;
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
 beforeEach(() => {
-	home = fs.mkdtempSync(path.join(os.tmpdir(), "acp-runtime-updates-"));
+	home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "acp-runtime-updates-")));
 	root = path.join(home, ".local", "opt", "agy-acp");
 	vi.spyOn(os, "homedir").mockReturnValue(home);
 	vi.stubEnv("HOME", home);
