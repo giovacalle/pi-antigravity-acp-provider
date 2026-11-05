@@ -40,6 +40,12 @@ import { runSetupWizard } from "../src/wizard.js";
 
 export type { AntigravityQuotaSnapshot } from "../src/acp/usage-quota.js";
 
+// Instances sharing an event bus all hear each request; the first to claim it replies. Pi loads every
+// instance without a module cache, so the claims live on globalThis.
+const CLAIMED_QUOTA_REQUESTS = Symbol.for("pi-antigravity-acp:quota-requests");
+const claimSlots = globalThis as unknown as Record<symbol, WeakSet<object> | undefined>;
+const claimedQuotaRequests = (claimSlots[CLAIMED_QUOTA_REQUESTS] ??= new WeakSet());
+
 export default function antigravityAcpExtension(pi: ExtensionAPI): void {
 	registerAntigravityAcp(pi);
 }
@@ -52,7 +58,8 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 	// Other extensions ask for quota with `{ reply }` and get exactly one `{ ok, quota | error }`.
 	const unsubscribeQuota = pi.events.on(QUOTA_REQUEST_CHANNEL, (data) => {
 		const reply = (data as { reply?: unknown } | undefined)?.reply;
-		if (typeof reply !== "function") return;
+		if (typeof reply !== "function" || claimedQuotaRequests.has(data as object)) return;
+		claimedQuotaRequests.add(data as object);
 		void runtime.quota(undefined).then(
 			(quota) => ({ ok: true as const, quota }),
 			(error: unknown) => ({ ok: false as const, error: errorMessage(error) }),

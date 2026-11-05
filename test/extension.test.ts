@@ -51,10 +51,11 @@ afterEach(async () => {
 });
 
 // Pi loads each extension instance with a fresh module graph.
-async function load(sessionId: string) {
+async function load(sessionId: string, events?: FakeExtensionApi["api"]["events"]) {
 	vi.resetModules();
 	const { registerAntigravityAcp } = await import("../extensions/index.js");
 	const pi = createFakeExtensionApi(registry);
+	if (events) pi.api.events = events;
 	registerAntigravityAcp(pi.api, (options) => {
 		const connection = new AntigravityAcpConnection({ ...options, command: process.execPath,
 			args: [fakeAgent], env: { ...process.env, FAKE_AGENT_LOG_FILE: log } });
@@ -230,6 +231,28 @@ describe("live quota", () => {
 			ok: false,
 			error: expect.stringContaining("Unable to retrieve quota status"),
 		});
+	});
+
+	it("replies once when several instances share one event bus", async () => {
+		const snapshot = parseUsageQuota(usageReply, now);
+		const parent = await load("a");
+		// Both instances share the runtime built by the first module graph.
+		(await spyQuota()).mockResolvedValue(snapshot);
+		const child = await load("b", parent.pi.api.events);
+
+		const reply = vi.fn();
+		parent.pi.api.events.emit(QUOTA_REQUEST_CHANNEL, { reply });
+
+		await vi.waitFor(() => expect(reply).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(reply).toHaveBeenCalledTimes(1);
+		expect(reply).toHaveBeenCalledWith({ ok: true, quota: snapshot });
+
+		// The surviving instance still answers once the other one stops listening.
+		await child.pi.emit("session_shutdown", { reason: "reload" }, child.ctx);
+		const next = vi.fn();
+		parent.pi.api.events.emit(QUOTA_REQUEST_CHANNEL, { reply: next });
+		await vi.waitFor(() => expect(next).toHaveBeenCalledTimes(1));
 	});
 
 	it("ignores requests without a reply function", async () => {

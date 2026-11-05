@@ -108,7 +108,7 @@ On first use of a custom profile without a config, existing permission/update se
 pi.events.emit("antigravity-acp:quota:request", { reply: (result) => { /* ... */ } });
 ```
 
-`reply` is called exactly once, with `{ ok: true, quota }` or `{ ok: false, error }`. `quota` is an `AntigravityQuotaSnapshot`, exported as a type by the package: `{ at: number; groups: { displayName: string; buckets: { window: string; remainingFraction: number; resetTime?: string }[] }[] }`. `at` is the read time in epoch milliseconds, `window` is `weekly`, `5h`, or the server's label for any other limit, `remainingFraction` has 1% precision, and `resetTime` is ISO 8601 at minute precision.
+`reply` is called exactly once per emitted request object, even when several provider instances share the event bus, with `{ ok: true, quota }` or `{ ok: false, error }`. `quota` is an `AntigravityQuotaSnapshot`, exported as a type by the package: `{ at: number; groups: { displayName: string; buckets: { window: string; remainingFraction: number; resetTime?: string }[] }[] }`. `at` is the read time in epoch milliseconds, `window` is `weekly`, `5h`, or the server's label for any other limit, `remainingFraction` has 1% precision, and `resetTime` is ISO 8601 at minute precision.
 
 ## Development
 
