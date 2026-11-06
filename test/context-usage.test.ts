@@ -83,7 +83,7 @@ describe("prompt context", () => {
 		expect(block.resource.text).not.toContain("Old rules");
 		expect(block.resource.text).not.toContain("Obsolete");
 		expect(block.resource.text).not.toContain("Tool result (undefined");
-		expect(result.prompt.slice(1)).toEqual([{ type: "text", text: "---\n\n# Current Pi user request" }, { type: "text", text: "new" }]);
+		expect(result.prompt.slice(1)).toEqual([{ type: "text", text: "\n\n---\n\n# Current Pi user request" }, { type: "text", text: "new" }]);
 	});
 
 	it("adds only unseen external deltas to a warm prompt", () => {
@@ -100,7 +100,7 @@ describe("prompt context", () => {
 			type: "resource",
 			resource: { text: expect.stringContaining("externally inserted") },
 		});
-		expect(result.prompt.slice(1)).toEqual([{ type: "text", text: "---\n\n# Current Pi user request" }, { type: "text", text: "current" }]);
+		expect(result.prompt.slice(1)).toEqual([{ type: "text", text: "\n\n---\n\n# Current Pi user request" }, { type: "text", text: "current" }]);
 	});
 });
 
