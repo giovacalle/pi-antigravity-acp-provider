@@ -197,18 +197,24 @@ for await (const line of rl) {
 		send({ jsonrpc: "2.0", id, result: {} });
 	} else if (method === "session/prompt") {
 		const text = params.prompt.filter((block) => block.type === "text").map((block) => block.text).join("\n");
-		// Handoffs carry the original request explicitly, but tell the agent not
-		// to repeat completed actions. Model that instruction rather than treating
-		// scenario keywords in the replayed request as a fresh tool invocation.
-		const continuing = params.prompt.some((block) => block.type === "text" && block.text.startsWith("Continue the current Pi user request"));
-		if (/^\/usage(?:\s|$)/iu.test(text.trim())) {
-			const reply = scenario === "usage-unavailable"
-				? "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- Unable to retrieve quota status (backend unavailable)"
-				: fs.readFileSync(new URL("./usage-reply.md", import.meta.url), "utf8");
+		// agy runs these slash commands itself instead of prompting the model.
+		const joined = params.prompt.filter((block) => block.type === "text").map((block) => block.text).join("").trim();
+		const slash = joined === "/logout" ? "logout" : /^\/usage(?:\s|$)/iu.test(joined) ? "usage"
+			: params.prompt.some((block) => block.type === "text" && /(?:\s|^)\/plan(?:\s|$)/u.test(block.text)) ? "plan" : undefined;
+		if (slash) {
+			const reply = slash !== "usage"
+				? `Intercepted /${slash}`
+				: scenario === "usage-unavailable"
+					? "### Session Usage\n- **Session total:** data not available yet\n\n### Quota Limits\n- Unable to retrieve quota status (backend unavailable)"
+					: fs.readFileSync(new URL("./usage-reply.md", import.meta.url), "utf8");
 			send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: reply } } } });
 			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
 			continue;
 		}
+		// Handoffs carry the original request explicitly, but tell the agent not
+		// to repeat completed actions. Model that instruction rather than treating
+		// scenario keywords in the replayed request as a fresh tool invocation.
+		const continuing = params.prompt.some((block) => block.type === "text" && block.text.startsWith("Continue the current Pi user request"));
 		if (scenario === "mode-drift" || scenario === "config-options-mode-drift") {
 			mode = "yolo";
 			send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: params.sessionId,

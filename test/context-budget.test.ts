@@ -1,7 +1,7 @@
 import type { AssistantMessage, Context, ToolResultMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
-import { buildPromptParts } from "../src/stream/context.js";
+import { buildPromptParts, neutralizeSlashCommands } from "../src/stream/context.js";
 import { usageFromPrompt } from "../src/stream/usage.js";
 
 const LIMIT = 32_000;
@@ -166,5 +166,51 @@ describe("bounded context reconstruction", () => {
 		] };
 		expect(buildPromptParts(context, true).prompt.at(-1)).toEqual({ type: "text", text: "REQUEST" });
 		expect(buildPromptParts(context, false, 0).prompt).toEqual([{ type: "text", text: "REQUEST" }]);
+	});
+});
+
+describe("slash command neutralization", () => {
+	const ZWSP = "\u200B";
+	const texts = (prompt: ReturnType<typeof buildPromptParts>["prompt"]) =>
+		prompt.flatMap((block) => block.type === "text" ? [block.text] : []);
+
+	it("keeps a user's leading slash command as text agy will not run", () => {
+		const [text] = texts(buildPromptParts({ messages: [{ role: "user", content: "/logout now", timestamp: 1 }] }, true).prompt);
+		expect(text).not.toMatch(/^\s*\//u);
+		expect(text).toContain("/logout now");
+	});
+
+	it.each([
+		["/logout", `${ZWSP}/logout`],
+		["/USAGE", `${ZWSP}/USAGE`],
+		["please\n/plan this", `please\n${ZWSP}/plan this`],
+		["/plan /usage", `${ZWSP}/plan ${ZWSP}/usage`],
+	])("marks the bare slash command in %j", (input, expected) => {
+		expect(neutralizeSlashCommands(input)).toBe(expected);
+	});
+
+	it.each(["/Users/me/a.ts", "see a /b/c", "https://x.y/z"])("leaves the path or URL %j untouched", (input) => {
+		expect(neutralizeSlashCommands(input)).toBe(input);
+	});
+
+	it("neutralizes the request after the cold context resource", () => {
+		const { prompt } = buildPromptParts({ systemPrompt: "RULES", messages: [{ role: "user", content: "/usage", timestamp: 1 }] }, true);
+		expect(prompt[0]?.type).toBe("resource");
+		expect(prompt.slice(1)).toEqual([{ type: "text", text: `${ZWSP}/usage` }]);
+	});
+
+	it("neutralizes the request after the continuation label and keeps its images", () => {
+		const context = toolContext("result");
+		context.messages[0] = { role: "user", content: [{ type: "text", text: "/plan x" }, IMAGE], timestamp: 1 };
+		const { prompt } = buildPromptParts(context, true);
+		expect(prompt.slice(1)).toEqual([
+			{ type: "text", text: expect.stringContaining("# Current Pi user request") },
+			{ type: "text", text: `${ZWSP}/plan x` }, IMAGE,
+		]);
+	});
+
+	it("neutralizes an unseen request on a warm session", () => {
+		const context: Context = { messages: [{ role: "user", content: "/logout", timestamp: 1 }] };
+		expect(buildPromptParts(context, false, 0).prompt).toEqual([{ type: "text", text: `${ZWSP}/logout` }]);
 	});
 });
