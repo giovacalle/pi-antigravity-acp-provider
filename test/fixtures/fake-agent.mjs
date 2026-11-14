@@ -283,6 +283,30 @@ for await (const line of rl) {
 			});
 			continue;
 		}
+		if (scenario === "resource-exhausted") {
+			// agy retries a model-path 429 with backoff and logs only to stderr: no update, no reply,
+			// and session/cancel is ignored. `retries N` recovers after N retries.
+			const retries = Number(/retries (\d+)/u.exec(text)?.[1] ?? Infinity);
+			const log = (line) => process.stderr.write(`I1114 22:07:04.512301 48213 local_connection.py:553] ${line}\n`);
+			log(`Starting inference with model gemini-4-hydrogen; access_token=ya29.fake-secret-access-token`);
+			if (text.includes("echo")) log(`prompt: ${text}`);
+			const delays = ["4s", "7.26s", "10.74s", "25.89s", "55.55s"];
+			let attempt = 0;
+			const timer = setInterval(() => {
+				if (attempt < retries) {
+					// Split mid-line: stderr chunks do not follow line boundaries.
+					process.stderr.write("W1114 22:07:04.512301 48213 http_client.go:211] Error 429, Message: Resource has been ex");
+					process.stderr.write("hausted (e.g. check quota)., Status: RESOURCE_EXHAUSTED\n");
+					log(`planner_generator.go:359 Encountered retryable api error. retrying in ${delays[Math.min(attempt, delays.length - 1)]}`);
+					attempt++;
+					return;
+				}
+				clearInterval(timer);
+				notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "PONG" } });
+				send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+			}, Number(process.env.FAKE_RETRY_STEP_MS ?? 20));
+			continue;
+		}
 		if (scenario === "quota-exhausted") {
 			// agy reports exhaustion as a plain reply: no usage, and `refusal` when the SDK flags it.
 			const reset = text.includes("absolute") ? " Your limit will reset on Oct 2, 2026 14:00 UTC."

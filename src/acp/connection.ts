@@ -19,6 +19,7 @@ import { boundedNdjsonStream } from "./bounded-stream.js";
 import { abortError, AntigravityAcpError, redact } from "./errors.js";
 import { AntigravityProcess, type AntigravityProcessOptions } from "./process.js";
 import { PromptWatchdog } from "./prompt-watchdog.js";
+import { ResourceExhaustionTracker } from "./quota.js";
 import {
 	decodeSessionState,
 	findSessionSelector,
@@ -54,6 +55,7 @@ export class AntigravityAcpConnection {
 	private readonly promptIdleTimeoutMs: number;
 	private readonly promptWorkIdleTimeoutMs: number;
 	private readonly watchdogs = new Map<string, PromptWatchdog>();
+	private readonly exhaustion = new Map<string, ResourceExhaustionTracker>();
 	private readonly protocolFailure: Promise<never>;
 	private readonly processFailure: Promise<never>;
 	private readonly sessions = new Map<string, SessionState>();
@@ -68,6 +70,9 @@ export class AntigravityAcpConnection {
 		// Validate before spawning a process, including programmatic timeout overrides.
 		new PromptWatchdog(this.promptIdleTimeoutMs, this.promptWorkIdleTimeoutMs, () => undefined).dispose();
 		this.process = new AntigravityProcess(options);
+		this.process.onStderrLine((line) => {
+			for (const tracker of this.exhaustion.values()) tracker.noteStderrLine(line);
+		});
 		let rejectProtocolFailure!: (error: Error) => void;
 		this.protocolFailure = new Promise<never>((_resolve, reject) => {
 			rejectProtocolFailure = reject;
@@ -99,6 +104,7 @@ export class AntigravityAcpConnection {
 		// resume. Opt into the full v1 surface, not the experimental v2 protocol.
 		this.connection = client({ name: "pi-antigravity-acp-provider" })
 			.onRequest(methods.client.session.requestPermission, async ({ params: request }) => {
+				this.exhaustion.get(request.sessionId)?.noteProgress();
 				const release = this.watchdogs.get(request.sessionId)?.beginPermission();
 				try {
 					return (await this.handlers.onPermission?.(request)) ?? { outcome: { outcome: "cancelled" } };
@@ -108,6 +114,7 @@ export class AntigravityAcpConnection {
 			})
 			.onNotification(methods.client.session.update, async ({ params: notification }) => {
 				this.watchdogs.get(notification.sessionId)?.noteUpdate(notification);
+				this.exhaustion.get(notification.sessionId)?.noteProgress();
 				if (notification.update.sessionUpdate === "config_option_update") {
 					this.updateSessionState(notification.sessionId, notification.update);
 				} else if (notification.update.sessionUpdate === "current_mode_update") {
@@ -407,7 +414,13 @@ export class AntigravityAcpConnection {
 				`Antigravity ACP session/prompt timed out: no ${busy ? "tool/permission " : ""}progress for ${ms}ms`));
 			void this.close().catch(() => undefined);
 		});
+		// agy retries a 429 without updating or answering; fail the prompt before the idle watchdog.
+		const exhaustion = new ResourceExhaustionTracker((message) => {
+			rejectStall(new AntigravityAcpError("quota", message));
+			void this.close().catch(() => undefined);
+		});
 		this.watchdogs.set(request.sessionId, watchdog);
+		this.exhaustion.set(request.sessionId, exhaustion);
 		watchdog.arm();
 		try {
 			return await Promise.race([
@@ -416,7 +429,9 @@ export class AntigravityAcpConnection {
 			]);
 		} finally {
 			watchdog.dispose();
+			exhaustion.dispose();
 			this.watchdogs.delete(request.sessionId);
+			this.exhaustion.delete(request.sessionId);
 		}
 	}
 

@@ -9,6 +9,7 @@ import { redact } from "./errors.js";
 import { applyAcpProxyEnvironment } from "./proxy.js";
 import { applyCredentialStorageEnvironment, type CredentialStorageOptions } from "./credential-storage.js";
 const STDERR_LIMIT = 16 * 1024;
+const STDERR_LINE_LIMIT = 4 * 1024;
 // Longer than supervisor.mjs's 750 ms agent-tree escalation window.
 const KILL_GRACE_MS = 1_500;
 let nextGeneration = 1;
@@ -125,6 +126,8 @@ export class AntigravityProcess {
 	readonly output: WritableStream<Uint8Array>;
 	readonly exited: Promise<ProcessExit>;
 	private stderr = "";
+	private stderrPartial = "";
+	private readonly stderrLineListeners = new Set<(line: string) => void>();
 	private ignoredStdoutNoise = 0;
 	private settled = false;
 	private closing?: Promise<void>;
@@ -164,6 +167,12 @@ export class AntigravityProcess {
 		child.stderr.setEncoding("utf8");
 		child.stderr.on("data", (chunk: string) => {
 			this.stderr = redact((this.stderr + chunk).slice(-STDERR_LIMIT));
+			const lines = (this.stderrPartial + chunk).split("\n");
+			this.stderrPartial = lines.pop()!.slice(-STDERR_LINE_LIMIT);
+			for (const line of lines) {
+				const safe = redact(line.slice(-STDERR_LINE_LIMIT));
+				for (const listener of this.stderrLineListeners) listener(safe);
+			}
 		});
 		child.once("error", (cause) => {
 			this.finish(resolveExit, null, null, `spawn failed: ${cause.message}`);
@@ -182,6 +191,11 @@ export class AntigravityProcess {
 
 	get stderrTail(): string {
 		return this.stderr;
+	}
+
+	/** Complete, redacted and length-bounded stderr lines as they arrive. */
+	onStderrLine(listener: (line: string) => void): void {
+		this.stderrLineListeners.add(listener);
 	}
 
 	get ignoredStdoutNoiseLines(): number {

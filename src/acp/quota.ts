@@ -20,3 +20,72 @@ export function quotaExhaustion(text: string, now = Date.now()): { resetAt?: str
 	if (month) return { resetAt: new Date(Date.UTC(Number(year), MONTHS.indexOf(month), Number(day), Number(hours), Number(minutes))).toISOString() };
 	return {};
 }
+
+/** agy retries a model-path 429 forever, logging only to stderr: no update and no reply.
+ * Tolerate this many retries per inference before failing the prompt. */
+export const RESOURCE_EXHAUSTED_MAX_RETRIES = 2;
+/** Total wait allowed from the first retry before failing, should agy stop logging. */
+export const RESOURCE_EXHAUSTED_GRACE_MS = 15_000;
+const API_ERROR = /\bError \d{3}, Message: /u;
+const EXHAUSTED = /\bError 429, Message: .*, Status: RESOURCE_EXHAUSTED\b/u;
+const RETRY = /\bEncountered retryable api error\. retrying in ((?:\d{1,6}(?:\.\d{1,6})?(?:h|ms|m|s|us|µs|ns))+)/u;
+const DURATION_MS: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1_000, ms: 1, us: 1e-3, "µs": 1e-3, ns: 1e-6 };
+
+/** Counts 429 RESOURCE_EXHAUSTED retries from agy's stderr; only a retry that follows the
+ * exact 429 error counts, so prompt text, model names and other retryable errors do not. */
+export class ResourceExhaustionTracker {
+	private exhausted = false;
+	private retries = 0;
+	private nextDelayMs = 0;
+	private timer: ReturnType<typeof setTimeout> | undefined;
+	private done = false;
+
+	constructor(private readonly onExhausted: (message: string) => void) {}
+
+	noteStderrLine(line: string): void {
+		if (this.done) return;
+		// Each retry follows its own error line; another API error supersedes a 429.
+		if (API_ERROR.test(line)) this.exhausted = EXHAUSTED.test(line);
+		const retry = RETRY.exec(line);
+		if (!retry || !this.exhausted) return;
+		this.exhausted = false;
+		this.retries += 1;
+		this.nextDelayMs = 0;
+		for (const [, count, unit] of retry[1]!.matchAll(/(\d+(?:\.\d+)?)(h|ms|m|s|us|µs|ns)/gu)) {
+			this.nextDelayMs += Number(count) * DURATION_MS[unit!]!;
+		}
+		if (this.retries > RESOURCE_EXHAUSTED_MAX_RETRIES) this.fire();
+		else if (!this.timer) {
+			this.timer = setTimeout(() => this.fire(), RESOURCE_EXHAUSTED_GRACE_MS);
+			this.timer.unref?.();
+		}
+	}
+
+	/** The model answered: earlier retries recovered. */
+	noteProgress(): void {
+		if (this.done) return;
+		this.exhausted = false;
+		this.retries = 0;
+		this.clearTimer();
+	}
+
+	dispose(): void {
+		this.done = true;
+		this.clearTimer();
+	}
+
+	private fire(): void {
+		this.dispose();
+		const times = this.retries === 1 ? "time" : "times";
+		this.onExhausted(
+			"Antigravity is refusing model requests for resource exhaustion (HTTP 429 RESOURCE_EXHAUSTED: rate limit or entitlement); " +
+				`agy retried ${this.retries} ${times}, next retry in ${Number((this.nextDelayMs / 1_000).toFixed(2))}s, without a reply. ` +
+				"Retry later or switch to another provider.",
+		);
+	}
+
+	private clearTimer(): void {
+		if (this.timer) clearTimeout(this.timer);
+		this.timer = undefined;
+	}
+}

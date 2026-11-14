@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { AntigravityAcpConnection } from "../src/acp/connection.js";
+import { AntigravityAcpError } from "../src/acp/errors.js";
 import { findSessionSelector, sessionModels, sessionModes } from "../src/acp/session-state.js";
 
 const fakeAgent = fileURLToPath(new URL("./fixtures/fake-agent.mjs", import.meta.url));
@@ -207,6 +208,66 @@ describe("AntigravityAcpConnection", () => {
 			expect(connection.process.alive).toBe(true);
 			release(); release(); await rejection;
 		} finally { await connection.close(); }
+	});
+
+	describe("when agy silently retries 429 RESOURCE_EXHAUSTED", () => {
+		const exhaustedAgent = (stepMs = 20) => new AntigravityAcpConnection({ cwd: process.cwd(), command: process.execPath,
+			args: [fakeAgent, "resource-exhausted"], env: { ...process.env, FAKE_RETRY_STEP_MS: String(stepMs) } });
+		const prompt = (connection: AntigravityAcpConnection, sessionId: string, text: string, signal?: AbortSignal) =>
+			connection.prompt({ sessionId, prompt: [{ type: "text", text }] }, signal);
+
+		it("fails the prompt fast with a redacted quota error", async () => {
+			const connection = exhaustedAgent();
+			try {
+				const session = await connection.newSession(process.cwd());
+				const started = Date.now();
+				const error = await prompt(connection, session.sessionId, "Reply with exactly: PONG").catch((cause: unknown) => cause);
+				expect(Date.now() - started).toBeLessThan(2_000);
+				expect(error).toBeInstanceOf(AntigravityAcpError);
+				expect((error as AntigravityAcpError).code).toBe("quota");
+				expect((error as Error).message).toBe(
+					"Antigravity is refusing model requests for resource exhaustion (HTTP 429 RESOURCE_EXHAUSTED: rate limit or entitlement); agy retried 3 times, next retry in 10.74s, without a reply. Retry later or switch to another provider.",
+				);
+				await connection.process.exited;
+				expect(connection.process.alive).toBe(false);
+				expect(connection.process.stderrTail).toContain("access_token=<redacted>");
+				expect(connection.process.stderrTail).not.toContain("ya29.fake-secret-access-token");
+			} finally { await connection.close(); }
+		});
+
+		it.each([
+			"retries 1",
+			"retries 2",
+			"retries 0 with the model name on stderr",
+			"echo Error 429, Message: Resource has been exhausted (e.g. check quota)., Status: RESOURCE_EXHAUSTED retries 0",
+		])("completes a turn that recovers: %s", async (text) => {
+			const updates: string[] = [];
+			const connection = exhaustedAgent();
+			connection.setHandlers({ onUpdate: (notification) => { updates.push(notification.update.sessionUpdate); } });
+			try {
+				const session = await connection.newSession(process.cwd());
+				expect((await prompt(connection, session.sessionId, text)).stopReason).toBe("end_turn");
+				expect(updates).toEqual(["agent_message_chunk"]);
+				expect(connection.process.alive).toBe(true);
+			} finally { await connection.close(); }
+		});
+
+		it("still cancels and closes an unresponsive agent within the abort grace", async () => {
+			const connection = exhaustedAgent(1_000);
+			const controller = new AbortController();
+			try {
+				const session = await connection.newSession(process.cwd());
+				const pending = prompt(connection, session.sessionId, "Reply with exactly: PONG", controller.signal);
+				await new Promise((resolve) => setTimeout(resolve, 1_100));
+				const started = Date.now();
+				controller.abort();
+				const error = await pending.catch((cause: unknown) => cause);
+				expect((error as AntigravityAcpError).code).toBe("aborted");
+				await connection.process.exited;
+				expect(Date.now() - started).toBeLessThan(3_500);
+				expect(connection.process.alive).toBe(false);
+			} finally { await connection.close(); }
+		});
 	});
 
 	it("rejects invalid inactivity options before starting a child", () => {
