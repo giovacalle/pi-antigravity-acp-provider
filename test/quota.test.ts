@@ -64,13 +64,33 @@ describe("ResourceExhaustionTracker", () => {
 		track.dispose();
 	});
 
-	it("fails 15 s after the first retry when agy goes quiet", () => {
+	it("fails at once when the announced retry delays pass 15 s", () => {
 		const { track, onExhausted } = tracker();
 		track.noteStderrLine(exhausted); track.noteStderrLine(retry("1m2.5s"));
-		vi.advanceTimersByTime(14_999);
-		expect(onExhausted).not.toHaveBeenCalled();
-		vi.advanceTimersByTime(1);
 		expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("agy retried 1 time, next retry in 62.5s"));
+		track.dispose();
+	});
+
+	it("fails when two announced delays together pass 15 s", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("10s"));
+		expect(onExhausted).not.toHaveBeenCalled();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("5.001s"));
+		expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("agy retried 2 times, next retry in 5s"));
+		track.dispose();
+	});
+
+	it("lets a turn recover after two retries even when the first update comes late", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("4s"));
+		vi.advanceTimersByTime(4_000);
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("7.26s"));
+		// The third call succeeds after 7.26 s; the model takes 8 s more to emit its first update.
+		vi.advanceTimersByTime(7_260 + 8_000);
+		expect(onExhausted).not.toHaveBeenCalled();
+		track.noteProgress();
+		vi.advanceTimersByTime(60_000);
+		expect(onExhausted).not.toHaveBeenCalled();
 		track.dispose();
 	});
 
