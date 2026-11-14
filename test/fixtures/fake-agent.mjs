@@ -315,14 +315,22 @@ for await (const line of rl) {
 		}
 		if (scenario === "resource-exhausted") {
 			// agy retries a model-path 429 with backoff and logs only to stderr: no update, no reply,
-			// and session/cancel is ignored. `retries N` recovers after N retries.
+			// and session/cancel is ignored. `retries N` recovers after N retries; with `progress`, the
+			// recovered inference streams an update and the next one retries N times again.
 			const retries = Number(/retries (\d+)/u.exec(text)?.[1] ?? Infinity);
 			const log = (line) => process.stderr.write(`I1114 22:07:04.512301 48213 local_connection.py:553] ${line}\n`);
 			log(`Starting inference with model gemini-4-hydrogen; access_token=ya29.fake-secret-access-token`);
 			if (text.includes("echo")) log(`prompt: ${text}`);
 			const delays = ["4s", "7.26s", "10.74s", "25.89s", "55.55s"];
 			let attempt = 0;
+			let progressed = !text.includes("progress");
 			const timer = setInterval(() => {
+				if (attempt === retries && !progressed) {
+					notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking" } });
+					progressed = true;
+					attempt = 0;
+					return;
+				}
 				if (attempt < retries) {
 					// Split mid-line: stderr chunks do not follow line boundaries.
 					process.stderr.write("W1114 22:07:04.512301 48213 http_client.go:211] Error 429, Message: Resource has been ex");

@@ -24,12 +24,18 @@ export function quotaExhaustion(text: string, now = Date.now()): { resetAt?: str
 /** agy retries a model-path 429 forever, logging only to stderr: no update and no reply.
  * Tolerate this many retries per inference before failing the prompt. */
 export const RESOURCE_EXHAUSTED_MAX_RETRIES = 2;
-/** Total retry delay agy may announce per inference before failing. Bounded by announced delays, not wall
- * clock: agy logs nothing once a retry succeeds, so silence cannot tell recovery from a hang. */
+/** Total retry delay agy may announce per inference before failing. */
 export const RESOURCE_EXHAUSTED_GRACE_MS = 15_000;
+/** After a retry, agy logs nothing more if the call succeeds, so silence alone cannot tell recovery from a hang.
+ * Each retry therefore allows its announced delay plus this margin for the model to start streaming. */
+export const RESOURCE_EXHAUSTED_STARTUP_MARGIN_MS = 30_000;
+/** Delay assumed for a retry whose announced delay cannot be parsed. */
+export const RESOURCE_EXHAUSTED_UNKNOWN_DELAY_MS = 10_000;
 const API_ERROR = /\bError \d{3}, Message: /u;
 const EXHAUSTED = /\bError 429, Message: .*, Status: RESOURCE_EXHAUSTED\b/u;
-const RETRY = /\bEncountered retryable api error\. retrying in ((?:\d{1,6}(?:\.\d{1,6})?(?:h|ms|m|s|us|µs|ns))+)/u;
+// The delay is Go's time.Duration.String(), e.g. "4s", "7.262817364s", "1m2.5s"; it stays optional so a
+// format change still counts the retry.
+const RETRY = /\bEncountered retryable api error\. retrying in\b(?: ((?:\d+(?:\.\d+)?(?:h|ms|m|s|us|µs|ns))+))?/u;
 const DURATION_MS: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1_000, ms: 1, us: 1e-3, "µs": 1e-3, ns: 1e-6 };
 
 /** Counts 429 RESOURCE_EXHAUSTED retries from agy's stderr; only a retry that follows the
@@ -37,8 +43,9 @@ const DURATION_MS: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1_000,
 export class ResourceExhaustionTracker {
 	private exhausted = false;
 	private retries = 0;
-	private nextDelayMs = 0;
+	private nextDelayMs: number | undefined;
 	private waitedMs = 0;
+	private timer: ReturnType<typeof setTimeout> | undefined;
 	private done = false;
 
 	constructor(private readonly onExhausted: (message: string) => void) {}
@@ -51,12 +58,22 @@ export class ResourceExhaustionTracker {
 		if (!retry || !this.exhausted) return;
 		this.exhausted = false;
 		this.retries += 1;
-		this.nextDelayMs = 0;
-		for (const [, count, unit] of retry[1]!.matchAll(/(\d+(?:\.\d+)?)(h|ms|m|s|us|µs|ns)/gu)) {
-			this.nextDelayMs += Number(count) * DURATION_MS[unit!]!;
+		this.nextDelayMs = undefined;
+		if (retry[1]) {
+			this.nextDelayMs = 0;
+			for (const [, count, unit] of retry[1].matchAll(/(\d+(?:\.\d+)?)(h|ms|m|s|us|µs|ns)/gu)) {
+				this.nextDelayMs += Number(count) * DURATION_MS[unit!]!;
+			}
 		}
-		this.waitedMs += this.nextDelayMs;
-		if (this.retries > RESOURCE_EXHAUSTED_MAX_RETRIES || this.waitedMs > RESOURCE_EXHAUSTED_GRACE_MS) this.fire();
+		const delayMs = this.nextDelayMs ?? RESOURCE_EXHAUSTED_UNKNOWN_DELAY_MS;
+		this.waitedMs += delayMs;
+		if (this.retries > RESOURCE_EXHAUSTED_MAX_RETRIES || this.waitedMs > RESOURCE_EXHAUSTED_GRACE_MS) {
+			this.fire();
+			return;
+		}
+		this.clearTimer();
+		this.timer = setTimeout(() => this.fire(), delayMs + RESOURCE_EXHAUSTED_STARTUP_MARGIN_MS);
+		this.timer.unref?.();
 	}
 
 	/** The model answered: earlier retries recovered. */
@@ -65,20 +82,29 @@ export class ResourceExhaustionTracker {
 		this.exhausted = false;
 		this.retries = 0;
 		this.waitedMs = 0;
+		this.clearTimer();
 	}
 
 	dispose(): void {
 		this.done = true;
+		this.clearTimer();
 	}
 
 	private fire(): void {
 		this.dispose();
 		const times = this.retries === 1 ? "time" : "times";
+		const next = this.nextDelayMs === undefined ? "next retry delay unknown"
+			: `next retry in ${Number((this.nextDelayMs / 1_000).toFixed(2))}s`;
 		// "quota exceeded" makes Pi's isRetryableAssistantError return false despite "429" and "rate limit".
 		this.onExhausted(
 			"Antigravity quota exceeded: the model path refused requests with HTTP 429 RESOURCE_EXHAUSTED (rate limit or entitlement); " +
-				`agy retried ${this.retries} ${times}, next retry in ${Number((this.nextDelayMs / 1_000).toFixed(2))}s, without a reply. ` +
+				`agy retried ${this.retries} ${times}, ${next}, without a reply. ` +
 				"Retry later or switch to another provider.",
 		);
+	}
+
+	private clearTimer(): void {
+		if (this.timer) clearTimeout(this.timer);
+		this.timer = undefined;
 	}
 }

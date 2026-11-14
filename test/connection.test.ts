@@ -279,6 +279,17 @@ describe("AntigravityAcpConnection", () => {
 			} finally { await connection.close(); }
 		});
 
+		it("starts the retry count over once the model streams an update", async () => {
+			const updates: string[] = [];
+			const connection = exhaustedAgent();
+			connection.setHandlers({ onUpdate: (notification) => { updates.push(notification.update.sessionUpdate); } });
+			try {
+				const session = await connection.newSession(process.cwd());
+				expect((await prompt(connection, session.sessionId, "retries 2 progress")).stopReason).toBe("end_turn");
+				expect(updates).toEqual(["agent_thought_chunk", "agent_message_chunk"]);
+			} finally { await connection.close(); }
+		});
+
 		it("still cancels and closes an unresponsive agent within the abort grace", async () => {
 			const connection = exhaustedAgent(1_000);
 			const controller = new AbortController();
