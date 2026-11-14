@@ -143,6 +143,7 @@ System instructions are kept outside truncated conversation history. Instruction
 When Antigravity reports that the account's quota is exhausted, the turn ends with `stopReason: "error"` and `Antigravity quota exceeded for <model>. Resets at <ISO 8601 time>.` (the reset part is omitted when Antigravity gives none). Pi does not retry quota errors automatically. The failed turn is not saved, and the ACP session stays warm for the next prompt.
 
 A user message such as `/plan`, `/usage` or `/logout` reaches the model as text: the provider puts an invisible U+200B before those three commands (and before any slash that starts the message) so the Antigravity server does not run them. Other slashes, such as paths, are left untouched. The marker is removed before the model sees the text.
+The model path can also refuse requests with HTTP 429 `RESOURCE_EXHAUSTED` (rate limit or entitlement) while plan usage looks healthy. Antigravity then retries with backoff indefinitely, logging only to stderr. The provider tolerates two such retries per inference; the third retry, or 15 seconds after the first retry without model progress, fails the turn with a `quota` error that reports the retry count and next delay and suggests retrying later or switching provider. The agent process is then closed, as after an inactivity timeout, so the retry loop stops and the next prompt starts a fresh one.
 
 ## Security boundary
 
