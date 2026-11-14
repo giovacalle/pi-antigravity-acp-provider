@@ -77,8 +77,9 @@ export class ResourceExhaustionTracker {
 	private fire(): void {
 		this.dispose();
 		const times = this.retries === 1 ? "time" : "times";
+		// "quota exceeded" makes Pi's isRetryableAssistantError return false despite "429" and "rate limit".
 		this.onExhausted(
-			"Antigravity is refusing model requests for resource exhaustion (HTTP 429 RESOURCE_EXHAUSTED: rate limit or entitlement); " +
+			"Antigravity quota exceeded: the model path refused requests with HTTP 429 RESOURCE_EXHAUSTED (rate limit or entitlement); " +
 				`agy retried ${this.retries} ${times}, next retry in ${Number((this.nextDelayMs / 1_000).toFixed(2))}s, without a reply. ` +
 				"Retry later or switch to another provider.",
 		);
