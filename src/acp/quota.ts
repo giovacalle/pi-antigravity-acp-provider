@@ -24,7 +24,8 @@ export function quotaExhaustion(text: string, now = Date.now()): { resetAt?: str
 /** agy retries a model-path 429 forever, logging only to stderr: no update and no reply.
  * Tolerate this many retries per inference before failing the prompt. */
 export const RESOURCE_EXHAUSTED_MAX_RETRIES = 2;
-/** Total wait allowed from the first retry before failing, should agy stop logging. */
+/** Total retry delay agy may announce per inference before failing. Bounded by announced delays, not wall
+ * clock: agy logs nothing once a retry succeeds, so silence cannot tell recovery from a hang. */
 export const RESOURCE_EXHAUSTED_GRACE_MS = 15_000;
 const API_ERROR = /\bError \d{3}, Message: /u;
 const EXHAUSTED = /\bError 429, Message: .*, Status: RESOURCE_EXHAUSTED\b/u;
@@ -37,7 +38,7 @@ export class ResourceExhaustionTracker {
 	private exhausted = false;
 	private retries = 0;
 	private nextDelayMs = 0;
-	private timer: ReturnType<typeof setTimeout> | undefined;
+	private waitedMs = 0;
 	private done = false;
 
 	constructor(private readonly onExhausted: (message: string) => void) {}
@@ -54,11 +55,8 @@ export class ResourceExhaustionTracker {
 		for (const [, count, unit] of retry[1]!.matchAll(/(\d+(?:\.\d+)?)(h|ms|m|s|us|µs|ns)/gu)) {
 			this.nextDelayMs += Number(count) * DURATION_MS[unit!]!;
 		}
-		if (this.retries > RESOURCE_EXHAUSTED_MAX_RETRIES) this.fire();
-		else if (!this.timer) {
-			this.timer = setTimeout(() => this.fire(), RESOURCE_EXHAUSTED_GRACE_MS);
-			this.timer.unref?.();
-		}
+		this.waitedMs += this.nextDelayMs;
+		if (this.retries > RESOURCE_EXHAUSTED_MAX_RETRIES || this.waitedMs > RESOURCE_EXHAUSTED_GRACE_MS) this.fire();
 	}
 
 	/** The model answered: earlier retries recovered. */
@@ -66,12 +64,11 @@ export class ResourceExhaustionTracker {
 		if (this.done) return;
 		this.exhausted = false;
 		this.retries = 0;
-		this.clearTimer();
+		this.waitedMs = 0;
 	}
 
 	dispose(): void {
 		this.done = true;
-		this.clearTimer();
 	}
 
 	private fire(): void {
@@ -83,10 +80,5 @@ export class ResourceExhaustionTracker {
 				`agy retried ${this.retries} ${times}, next retry in ${Number((this.nextDelayMs / 1_000).toFixed(2))}s, without a reply. ` +
 				"Retry later or switch to another provider.",
 		);
-	}
-
-	private clearTimer(): void {
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = undefined;
 	}
 }
