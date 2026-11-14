@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { quotaExhaustion, ResourceExhaustionTracker } from "../src/acp/quota.js";
+import {
+	quotaExhaustion,
+	RESOURCE_EXHAUSTED_STARTUP_MARGIN_MS,
+	RESOURCE_EXHAUSTED_UNKNOWN_DELAY_MS,
+	ResourceExhaustionTracker,
+} from "../src/acp/quota.js";
 
 const now = Date.UTC(2026, 9, 30, 12, 0);
 const notice = (reset = "") => `Usage Limit Reached\n\nYou have reached your current quota for this period.${reset}`;
@@ -104,6 +109,86 @@ describe("ResourceExhaustionTracker", () => {
 		track.dispose();
 		vi.advanceTimersByTime(20_000);
 		expect(onExhausted).not.toHaveBeenCalled();
+	});
+
+	it("fails when agy goes quiet past the announced delay plus the start-up margin", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("4s"));
+		vi.advanceTimersByTime(4_000 + RESOURCE_EXHAUSTED_STARTUP_MARGIN_MS - 1);
+		expect(onExhausted).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("agy retried 1 time, next retry in 4s"));
+		track.dispose();
+	});
+
+	it("re-arms the quiet timer on each retry", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("4s"));
+		vi.advanceTimersByTime(4_000);
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("7.26s"));
+		vi.advanceTimersByTime(7_260 + RESOURCE_EXHAUSTED_STARTUP_MARGIN_MS - 1);
+		expect(onExhausted).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("agy retried 2 times, next retry in 7.26s"));
+		track.dispose();
+	});
+
+	it("never fires during the announced delay of a call that then recovers", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("15s"));
+		vi.advanceTimersByTime(15_000 + RESOURCE_EXHAUSTED_STARTUP_MARGIN_MS - 1);
+		track.noteProgress();
+		vi.advanceTimersByTime(10 * 60_000);
+		expect(onExhausted).not.toHaveBeenCalled();
+		track.dispose();
+	});
+
+	it("stops the quiet timer on dispose", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("4s"));
+		track.dispose();
+		vi.advanceTimersByTime(10 * 60_000);
+		expect(onExhausted).not.toHaveBeenCalled();
+	});
+
+	it("parses Go durations with nanosecond precision", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("4.000000001s"));
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("7.262817364s"));
+		expect(onExhausted).not.toHaveBeenCalled();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("1.5h0m0.123456789s"));
+		expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("agy retried 3 times, next retry in 5400.12s"));
+		track.dispose();
+	});
+
+	it("counts a retry whose delay cannot be parsed and assumes the default delay", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry("a moment"));
+		vi.advanceTimersByTime(RESOURCE_EXHAUSTED_UNKNOWN_DELAY_MS + RESOURCE_EXHAUSTED_STARTUP_MARGIN_MS - 1);
+		expect(onExhausted).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("agy retried 1 time, next retry delay unknown, without a reply"));
+		track.dispose();
+	});
+
+	it("counts assumed delays toward the 15 s budget", () => {
+		const { track, onExhausted } = tracker();
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry(""));
+		expect(onExhausted).not.toHaveBeenCalled();
+		// 10 s + 10 s assumed > 15 s.
+		track.noteStderrLine(exhausted); track.noteStderrLine(retry(""));
+		expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("agy retried 2 times, next retry delay unknown"));
+		track.dispose();
+	});
+
+	// Accepted risk, unproven live: agy is not known to echo prompts to stderr. A prompt carrying both the exact
+	// 429 line and the retry line on stderr would count; anchoring on the glog prefix is not an option because
+	// real stderr interleaves several glog segments on one line.
+	it("counts a stderr echo of a prompt that quotes both the 429 and the retry lines", () => {
+		const { track, onExhausted } = tracker();
+		for (let i = 0; i < 3; i++) track.noteStderrLine(`I1114 22:07:04.000003 48213 local_connection.py:553] prompt: ${exhausted} ${retry("4s")}`);
+		expect(onExhausted).toHaveBeenCalledOnce();
+		track.dispose();
 	});
 
 	it("ignores other errors, bare markers, prompt text and model names", () => {
