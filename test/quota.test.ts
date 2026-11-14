@@ -50,7 +50,7 @@ describe("ResourceExhaustionTracker", () => {
 		expect(onExhausted).not.toHaveBeenCalled();
 		track.noteStderrLine(exhausted); track.noteStderrLine(retry("10.74s"));
 		expect(onExhausted).toHaveBeenCalledExactlyOnceWith(
-			"Antigravity is refusing model requests for resource exhaustion (HTTP 429 RESOURCE_EXHAUSTED: rate limit or entitlement); agy retried 3 times, next retry in 10.74s, without a reply. Retry later or switch to another provider.",
+			"Antigravity quota exceeded: the model path refused requests with HTTP 429 RESOURCE_EXHAUSTED (rate limit or entitlement); agy retried 3 times, next retry in 10.74s, without a reply. Retry later or switch to another provider.",
 		);
 		track.noteStderrLine(exhausted); track.noteStderrLine(retry("25.89s"));
 		expect(onExhausted).toHaveBeenCalledTimes(1);

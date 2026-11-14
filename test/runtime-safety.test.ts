@@ -1,4 +1,4 @@
-import { isContextOverflow, normalizeContext, type Context, type Model } from "@earendil-works/pi-ai";
+import { isContextOverflow, isRetryableAssistantError, normalizeContext, type Context, type Model } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -442,6 +442,17 @@ describe("quota exhaustion", () => {
 		const message = await turn(runtime, [user("refusal")], "quota");
 		expect(message.stopReason).toBe("error");
 		expect(message.errorMessage).toMatch(/quota exceeded/u);
+	});
+
+	it("fails a turn stuck on 429 RESOURCE_EXHAUSTED retries without Pi retrying it", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const { runtime } = setup("resource-exhausted", "yolo", store);
+		const message = await turn(runtime, [user("Reply with exactly: PONG")], "exhausted");
+		expect(message.stopReason).toBe("error");
+		expect(message.errorMessage).toMatch(/^Antigravity quota exceeded:/u);
+		expect(isRetryableAssistantError(message)).toBe(false);
+		expect(store.get("exhausted")?.messageCount ?? 0).toBe(0);
 	});
 
 	it("leaves a normal reply that quotes the wording untouched", async () => {

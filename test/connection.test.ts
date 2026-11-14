@@ -226,7 +226,7 @@ describe("AntigravityAcpConnection", () => {
 				expect(error).toBeInstanceOf(AntigravityAcpError);
 				expect((error as AntigravityAcpError).code).toBe("quota");
 				expect((error as Error).message).toBe(
-					"Antigravity is refusing model requests for resource exhaustion (HTTP 429 RESOURCE_EXHAUSTED: rate limit or entitlement); agy retried 3 times, next retry in 10.74s, without a reply. Retry later or switch to another provider.",
+					"Antigravity quota exceeded: the model path refused requests with HTTP 429 RESOURCE_EXHAUSTED (rate limit or entitlement); agy retried 3 times, next retry in 10.74s, without a reply. Retry later or switch to another provider.",
 				);
 				await connection.process.exited;
 				expect(connection.process.alive).toBe(false);
