@@ -290,6 +290,22 @@ describe("AntigravityAcpConnection", () => {
 			} finally { await connection.close(); }
 		});
 
+		it("starts the retry count over once agy asks for permission", async () => {
+			const updates: string[] = [];
+			let permissions = 0;
+			const connection = exhaustedAgent();
+			connection.setHandlers({
+				onUpdate: (notification) => { updates.push(notification.update.sessionUpdate); },
+				onPermission: async () => { permissions++; return { outcome: { outcome: "selected", optionId: "allow-once" } }; },
+			});
+			try {
+				const session = await connection.newSession(process.cwd());
+				expect((await prompt(connection, session.sessionId, "retries 2 permission")).stopReason).toBe("end_turn");
+				expect(permissions).toBe(1);
+				expect(updates).toEqual(["agent_message_chunk"]);
+			} finally { await connection.close(); }
+		});
+
 		it("still cancels and closes an unresponsive agent within the abort grace", async () => {
 			const connection = exhaustedAgent(1_000);
 			const controller = new AbortController();
