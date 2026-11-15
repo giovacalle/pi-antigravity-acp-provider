@@ -22,6 +22,8 @@ let permissionPromptId;
 let hangingPromptId;
 let bridgePromptId;
 let mcpServer;
+// Set while the resource-exhausted scenario waits for the client to answer its permission request.
+let resumeAfterPermission;
 
 for await (const line of rl) {
 	if (!line.trim()) continue;
@@ -44,7 +46,10 @@ for await (const line of rl) {
 	const { id, method, params } = message;
 	if (process.env.FAKE_AGENT_LOG_FILE && method) fs.appendFileSync(process.env.FAKE_AGENT_LOG_FILE,
 		JSON.stringify({ method, ...(method === "initialize" ? { params } : {}), ...(method === "session/prompt" ? { prompt: params.prompt, mode } : {}), ...(method === "session/set_mode" ? { modeId: params.modeId } : {}) }) + "\n");
-	if (id === "permission-1" && method === undefined) {
+	if (id === "exhausted-permission" && method === undefined) {
+		resumeAfterPermission?.();
+		resumeAfterPermission = undefined;
+	} else if (id === "permission-1" && method === undefined) {
 		if (permissionPromptId === undefined) continue;
 		const decision = message.result?.outcome?.outcome ?? "cancelled";
 		send({
@@ -286,15 +291,34 @@ for await (const line of rl) {
 		if (scenario === "resource-exhausted") {
 			// agy retries a model-path 429 with backoff and logs only to stderr: no update, no reply,
 			// and session/cancel is ignored. `retries N` recovers after N retries; with `progress`, the
-			// recovered inference streams an update and the next one retries N times again.
+			// recovered inference streams an update and the next one retries N times again; with
+			// `permission`, it asks for permission instead, with no update before or after, and then
+			// retries N times again.
 			const retries = Number(/retries (\d+)/u.exec(text)?.[1] ?? Infinity);
+			const asksPermission = text.includes("permission");
 			const log = (line) => process.stderr.write(`I1114 22:07:04.512301 48213 local_connection.py:553] ${line}\n`);
 			log(`Starting inference with model gemini-4-hydrogen; access_token=ya29.fake-secret-access-token`);
 			if (text.includes("echo")) log(`prompt: ${text}`);
 			const delays = ["4s", "7.26s", "10.74s", "25.89s", "55.55s"];
 			let attempt = 0;
-			let progressed = !text.includes("progress");
+			let progressed = !text.includes("progress") && !asksPermission;
+			let awaitingPermission = false;
 			const timer = setInterval(() => {
+				if (awaitingPermission) return;
+				if (attempt === retries && !progressed && asksPermission) {
+					awaitingPermission = true;
+					resumeAfterPermission = () => {
+						awaitingPermission = false;
+						progressed = true;
+						attempt = 0;
+					};
+					send({ jsonrpc: "2.0", id: "exhausted-permission", method: "session/request_permission", params: {
+						sessionId: params.sessionId,
+						toolCall: { toolCallId: "native-tool-1", title: "Run native command", kind: "execute" },
+						options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+					} });
+					return;
+				}
 				if (attempt === retries && !progressed) {
 					notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking" } });
 					progressed = true;
