@@ -18,6 +18,20 @@ afterEach(() => {
 });
 
 describe("AcpSessionStore", () => {
+	it("drops a record with an unknown systemPromptDelivery", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-sessions-"));
+		roots.push(root);
+		const file = path.join(root, "sessions.json");
+		const base = { acpSessionId: "acp", acpModelId: "gemini-low", cwd: "/tmp/project", messageCount: 2, historyFingerprint: "abc", lastActive: Date.now() };
+		fs.writeFileSync(file, JSON.stringify([
+			{ ...base, piSessionId: "ok", systemPromptDelivery: "append" },
+			{ ...base, piSessionId: "bad", systemPromptDelivery: "other" },
+		]));
+		const store = new AcpSessionStore(file);
+		expect(store.get("ok")?.systemPromptDelivery).toBe("append");
+		expect(store.get("bad")).toBeUndefined();
+	});
+
 	it("persists, replaces, and removes Pi-to-ACP bindings", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-sessions-"));
 		roots.push(root);

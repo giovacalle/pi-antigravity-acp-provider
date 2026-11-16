@@ -237,6 +237,7 @@ export function registerAntigravityAcp(pi: ExtensionAPI, connectionFactory?: Ant
 					`Credential storage (preflight): ${describeCredentialStorage()}`,
 					`Requested permission mode: ${permissionModeLabel(snapshot.permissionMode)}`,
 					`Native tools: ${Array.isArray(snapshot.nativeTools) ? snapshot.nativeTools.join(", ") || "none" : snapshot.nativeTools}`,
+					`System prompt delivery: ${snapshot.systemPromptDelivery}`,
 					`Active bindings: ${snapshot.bindings}`,
 					`Idle eviction: ttl=${snapshot.idleTtlMs ? `${snapshot.idleTtlMs / 1000}s` : "off"} evicted=${snapshot.evictions}`,
 					`Live session cap: ${snapshot.maxLiveSessions || "unlimited"} evicted=${snapshot.capEvictions} overflows=${snapshot.capOverflows}`,

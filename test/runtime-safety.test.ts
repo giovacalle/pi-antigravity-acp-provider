@@ -765,12 +765,21 @@ describe("instructions in the first prompt (default delivery)", () => {
 		expect(setupMethods(second.entries())).toEqual(methods);
 	});
 
-	it("records and compares the effective delivery, so append on an older runtime resumes under context", async () => {
+	it("records the effective delivery, so append on an older runtime resumes under context", async () => {
 		vi.stubEnv("FAKE_AGENT_VERSION", "1.4.1");
 		const store = storeIn();
 		const saved = await savedTurn(store, "append");
 		expect(store.get("mode")?.systemPromptDelivery).toBe("context");
 		const second = setup(undefined, "yolo", store);
+		expect((await secondTurn(second.runtime, saved)).stopReason).toBe("stop");
+		expect(setupMethods(second.entries())).toEqual(["session/resume", "session/prompt"]);
+	});
+
+	it("compares the effective delivery, not the configured one: append on an older runtime still resumes under append", async () => {
+		vi.stubEnv("FAKE_AGENT_VERSION", "1.4.1");
+		const store = storeIn();
+		const saved = await savedTurn(store, "append");
+		const second = setup(undefined, "yolo", store, { systemPromptDelivery: "append" });
 		expect((await secondTurn(second.runtime, saved)).stopReason).toBe("stop");
 		expect(setupMethods(second.entries())).toEqual(["session/resume", "session/prompt"]);
 	});
