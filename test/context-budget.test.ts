@@ -187,6 +187,7 @@ describe("slash command neutralization", () => {
 		["/plan /usage", `${ZWSP}/plan ${ZWSP}/usage`],
 		["hi\u0085/plan x", `hi\u0085${ZWSP}/plan x`],
 		["hi\u001f/plan", `hi\u001f${ZWSP}/plan`],
+		["hi /plan\u0085x", `hi ${ZWSP}/plan\u0085x`],
 		["hi /usage now", `hi ${ZWSP}/usage now`],
 		["please read this:\n/plan is just text", `please read this:\n${ZWSP}/plan is just text`],
 		["a /logout b", `a ${ZWSP}/logout b`],

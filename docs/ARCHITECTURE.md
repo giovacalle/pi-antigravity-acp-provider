@@ -91,7 +91,7 @@ interface Binding {
 }
 ```
 
-A binding queue serializes user prompts and continuations. Never key solely by cwd. If Pi omits `sessionId`, create an ephemeral binding scoped to the runtime call chain; do not share arbitrary conversations by cwd.
+A binding queue serializes user prompts and continuations. Never key solely by cwd. If Pi omits `sessionId` or sends `cacheRetention: "none"` (a one-off request such as a compaction summary), create an ephemeral binding scoped to the runtime call chain; do not share arbitrary conversations by cwd.
 
 The v1 implementation uses one process per active binding for isolation and simple cancellation. Catalog discovery uses a separate process that closes after publication. A later measured optimization may multiplex sessions only if Gemini CLI demonstrates correct concurrent routing. A bounded pool (for example 2–4 live binding processes) and idle eviction prevents unbounded growth.
 

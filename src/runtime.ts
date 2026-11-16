@@ -810,12 +810,14 @@ export class AntigravityRuntime {
 					`Antigravity quota exceeded for ${binding.modelId}.${quota.resetAt ? ` Resets at ${quota.resetAt}.` : ""}`);
 			}
 			if (binding.contextUsed !== undefined) {
-				// Pi sizes the context from the last message's totalTokens, but the response sums every
-				// inference. agy adds cache reads to `used` twice; with one inference the response's cache
-				// count is that inference's, so subtracting it is exact. Longer prompts with cache reads
-				// still overcount by the last inference's cached tokens.
+				// Pi checks input + cacheRead for silent overflow, not totalTokens. For multiple inferences,
+				// only the latest context size is known, not its cache split; metrics above keep billed totals.
+				// agy adds cache reads to `used` twice; only a single inference's cache count is exact,
+				// so multiple inferences still use `used` as an upper bound.
 				activeWriter.message.usage = {
 					...usage,
+					input: binding.inferences > 1 ? binding.contextUsed : usage.input,
+					cacheRead: binding.inferences > 1 ? 0 : usage.cacheRead,
 					totalTokens: binding.inferences === 1 ? Math.max(0, binding.contextUsed - usage.cacheRead) : binding.contextUsed,
 				};
 			} else activeWriter.message.usage = usage;
@@ -844,6 +846,9 @@ export class AntigravityRuntime {
 			throw error;
 		} finally {
 			if (onTurnAbort) options.signal?.removeEventListener("abort", onTurnAbort);
+			// ACP can time out before Pi's tool finishes; replay late results in a new prompt, not a dead continuation.
+			cancelPermission(binding);
+			cancelPiTools(binding, "Antigravity prompt ended before Pi returned the tool result");
 			completeTurn?.();
 			binding.turnCompletion = undefined;
 			binding.abortRequested = false;
@@ -857,7 +862,7 @@ export class AntigravityRuntime {
 
 	private async awaitContinuation(binding: Binding, signal?: AbortSignal): Promise<void> {
 		const completion = binding.turnCompletion;
-		if (!completion) return;
+		if (!completion) throw new AntigravityAcpError("protocol", "Antigravity prompt ended before Pi could continue");
 		if (!signal) {
 			await completion;
 			return;
