@@ -32,10 +32,10 @@ describe("permission configuration", () => {
 		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-acp-config-"));
 		directories.push(directory);
 		const file = path.join(directory, "nested", "config.json");
-		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 		saveRuntimeUpdateMode("notify", file);
 		savePermissionMode("auto_edit", file);
-		expect(loadConfig(file)).toEqual({ permissions: "auto_edit", runtimeUpdates: "notify", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig(file)).toEqual({ permissions: "auto_edit", runtimeUpdates: "notify", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 	});
 
 	it("resolves default agent directory and config paths when PI_CODING_AGENT_DIR is unset", () => {
@@ -61,9 +61,9 @@ describe("permission configuration", () => {
 		expect(resolveConfigRoot()).toBe(path.join(customAgentDir, "antigravity-acp-provider"));
 		expect(resolveConfigPath()).toBe(path.join(customAgentDir, "antigravity-acp-provider", "config.json"));
 
-		expect(loadConfig()).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig()).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 		savePermissionMode("default");
-		expect(loadConfig()).toEqual({ permissions: "default", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig()).toEqual({ permissions: "default", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 
 		const configFile = path.join(customAgentDir, "antigravity-acp-provider", "config.json");
 		expect(fs.existsSync(configFile)).toBe(true);
@@ -100,7 +100,7 @@ describe("permission configuration", () => {
 			JSON.stringify({ permissions: "auto_edit", runtimeUpdates: "manual" }),
 		);
 
-		expect(loadConfig()).toEqual({ permissions: "auto_edit", runtimeUpdates: "manual", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig()).toEqual({ permissions: "auto_edit", runtimeUpdates: "manual", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 		const targetFile = path.join(fakeHome, ".pi", "agent", "antigravity-acp-provider", "config.json");
 		expect(fs.existsSync(targetFile)).toBe(true);
 	});
@@ -121,7 +121,7 @@ describe("permission configuration", () => {
 		directories.push(customAgentDir);
 		process.env.PI_CODING_AGENT_DIR = customAgentDir;
 
-		expect(loadConfig()).toEqual({ permissions: "auto_edit", runtimeUpdates: "notify", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig()).toEqual({ permissions: "auto_edit", runtimeUpdates: "notify", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 		const targetFile = path.join(customAgentDir, "antigravity-acp-provider", "config.json");
 		expect(fs.existsSync(targetFile)).toBe(true);
 		expect(fs.readFileSync(path.join(defaultAntigravityDir, "config.json"), "utf8")).toBe(
@@ -136,13 +136,13 @@ describe("permission configuration", () => {
 		const file = path.join(directory, "config.json");
 		expect(loadConfig(file).idleTtlMs).toBe(600000);
 		fs.writeFileSync(file, JSON.stringify({ idleTtlMs: 0, maxLiveSessions: 4 }));
-		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 0, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 0, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 		fs.writeFileSync(file, JSON.stringify({ idleTtlMs: -1 }));
 		expect(loadConfig(file).idleTtlMs).toBe(600000);
 		fs.writeFileSync(file, JSON.stringify({ idleTtlMs: 1.5 }));
 		expect(loadConfig(file).idleTtlMs).toBe(600000);
 		saveRuntimeUpdateMode("manual", file);
-		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "manual", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "manual", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 	});
 
 	it("reads the live session cap, where 0 means unlimited and invalid values use the default", () => {
@@ -151,7 +151,7 @@ describe("permission configuration", () => {
 		const file = path.join(directory, "config.json");
 		expect(loadConfig(file).maxLiveSessions).toBe(4);
 		fs.writeFileSync(file, JSON.stringify({ maxLiveSessions: 0 }));
-		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 0, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig(file)).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 0, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 		fs.writeFileSync(file, JSON.stringify({ maxLiveSessions: -1 }));
 		expect(loadConfig(file).maxLiveSessions).toBe(4);
 		fs.writeFileSync(file, JSON.stringify({ maxLiveSessions: 2.5 }));
@@ -189,6 +189,23 @@ describe("permission configuration", () => {
 		}
 	});
 
+	it("reads the system prompt delivery, where invalid values use context", () => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-acp-config-"));
+		directories.push(directory);
+		const file = path.join(directory, "config.json");
+		expect(loadConfig(file).systemPromptDelivery).toBe("context");
+		fs.writeFileSync(file, JSON.stringify({ systemPromptDelivery: "append" }));
+		expect(loadConfig(file).systemPromptDelivery).toBe("append");
+		saveRuntimeUpdateMode("manual", file);
+		expect(loadConfig(file).systemPromptDelivery).toBe("append");
+		fs.writeFileSync(file, JSON.stringify({ systemPromptDelivery: "context" }));
+		expect(loadConfig(file).systemPromptDelivery).toBe("context");
+		for (const invalid of ["Append", "", 1, null, ["append"], {}]) {
+			fs.writeFileSync(file, JSON.stringify({ systemPromptDelivery: invalid }));
+			expect(loadConfig(file).systemPromptDelivery).toBe("context");
+		}
+	});
+
 	it("does not overwrite an existing custom profile or copy saved sessions", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "profile-migration-"));
 		directories.push(root);
@@ -202,10 +219,10 @@ describe("permission configuration", () => {
 		fs.mkdirSync(path.dirname(target), { recursive: true });
 		const existing = JSON.stringify({ permissions: "default", runtimeUpdates: "manual" });
 		fs.writeFileSync(target, existing);
-		expect(loadConfig()).toEqual({ permissions: "default", runtimeUpdates: "manual", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig()).toEqual({ permissions: "default", runtimeUpdates: "manual", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 		expect(fs.readFileSync(target, "utf8")).toBe(existing);
 		fs.unlinkSync(target);
-		expect(loadConfig()).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", sharedProcess: false, maxSessionsPerProcess: 4 });
+		expect(loadConfig()).toEqual({ permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: 600000, maxLiveSessions: 4, nativeTools: "all", systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: 4 });
 		expect(fs.existsSync(path.join(path.dirname(target), "sessions.json"))).toBe(false);
 		expect(fs.existsSync(path.join(source, "sessions.json"))).toBe(true);
 	});
