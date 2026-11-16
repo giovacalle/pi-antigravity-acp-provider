@@ -6,6 +6,9 @@ export type PermissionMode = "default" | "auto_edit" | "yolo";
 export type RuntimeUpdateMode = "automatic" | "notify" | "manual";
 // Antigravity builtin tools to enable: every one, none, or the listed names.
 export type NativeTools = "all" | "none" | string[];
+// Where Pi's system instructions travel: the first prompt's context resource, or agy's
+// `_meta.antigravity.systemPrompt.append` in session setup (agy 1.4.3 and newer only).
+export type SystemPromptDelivery = "context" | "append";
 
 export interface AntigravityAcpConfig {
 	permissions: PermissionMode;
@@ -13,6 +16,7 @@ export interface AntigravityAcpConfig {
 	idleTtlMs: number;
 	maxLiveSessions: number;
 	nativeTools: NativeTools;
+	systemPromptDelivery: SystemPromptDelivery;
 	/** Run concurrent sessions of one account on a shared ACP process. */
 	sharedProcess: boolean;
 	maxSessionsPerProcess: number;
@@ -63,6 +67,7 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 			idleTtlMs?: unknown;
 			maxLiveSessions?: unknown;
 			nativeTools?: unknown;
+			systemPromptDelivery?: unknown;
 			sharedProcess?: unknown;
 			maxSessionsPerProcess?: unknown;
 		};
@@ -74,6 +79,7 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 				? parsed.maxLiveSessions as number
 				: DEFAULT_MAX_LIVE_SESSIONS,
 			nativeTools: isNativeTools(parsed.nativeTools) ? parsed.nativeTools : "all",
+			systemPromptDelivery: parsed.systemPromptDelivery === "append" ? "append" : "context",
 			sharedProcess: parsed.sharedProcess === true,
 			maxSessionsPerProcess: Number.isSafeInteger(parsed.maxSessionsPerProcess) && (parsed.maxSessionsPerProcess as number) >= 1
 				? parsed.maxSessionsPerProcess as number
@@ -83,7 +89,7 @@ export function loadConfig(file = resolveConfigPath()): AntigravityAcpConfig {
 		// Missing or malformed configuration uses the documented defaults.
 	}
 	return { permissions: "yolo", runtimeUpdates: "automatic", idleTtlMs: DEFAULT_IDLE_TTL_MS, maxLiveSessions: DEFAULT_MAX_LIVE_SESSIONS, nativeTools: "all",
-		sharedProcess: false, maxSessionsPerProcess: DEFAULT_MAX_SESSIONS_PER_PROCESS };
+		systemPromptDelivery: "context", sharedProcess: false, maxSessionsPerProcess: DEFAULT_MAX_SESSIONS_PER_PROCESS };
 }
 
 export function savePermissionMode(mode: PermissionMode, file = resolveConfigPath()): void {

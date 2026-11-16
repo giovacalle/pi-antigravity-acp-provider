@@ -26,6 +26,7 @@ export function acquireSharedRuntime(connectionFactory?: AntigravityConnectionFa
 			idleTtlMs: config.idleTtlMs,
 			maxLiveSessions: config.maxLiveSessions,
 			nativeTools: config.nativeTools,
+			systemPromptDelivery: config.systemPromptDelivery,
 			sharedProcess: config.sharedProcess,
 			maxSessionsPerProcess: config.maxSessionsPerProcess,
 		});

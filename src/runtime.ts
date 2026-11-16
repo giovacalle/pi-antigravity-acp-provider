@@ -55,7 +55,7 @@ import {
 	type ToolOmission,
 	type PiToolInvocation,
 } from "./mcp/bridge.js";
-import { DEFAULT_IDLE_TTL_MS, DEFAULT_MAX_LIVE_SESSIONS, DEFAULT_MAX_SESSIONS_PER_PROCESS, type NativeTools, type PermissionMode } from "./config.js";
+import { DEFAULT_IDLE_TTL_MS, DEFAULT_MAX_LIVE_SESSIONS, DEFAULT_MAX_SESSIONS_PER_PROCESS, type NativeTools, type PermissionMode, type SystemPromptDelivery } from "./config.js";
 import { resolveAcpModelId } from "./models.js";
 import { type PromptParts, buildPromptParts, currentSystemInstructions } from "./stream/context.js";
 import { PiEventWriter } from "./stream/pi-events.js";
@@ -97,7 +97,7 @@ interface Binding {
 	session: AcpNewSessionResponse;
 	mode: PermissionMode;
 	instructionsFingerprint: string | undefined;
-	/** The runtime takes Pi's instructions as its session system prompt rather than in the first prompt. */
+	/** Pi's instructions travel as the session system prompt (append delivery on agy 1.4.3+) rather than in the first prompt. */
 	instructionsInSetup: boolean;
 	needsReconstruction: boolean;
 	modelId: string;
@@ -151,6 +151,7 @@ export interface RuntimeSnapshot {
 	capEvictions: number;
 	capOverflows: number;
 	nativeTools: NativeTools;
+	systemPromptDelivery: SystemPromptDelivery;
 	sharedProcess: boolean;
 	maxSessionsPerProcess: number;
 	sharedProcesses: PooledProcessSnapshot[];
@@ -205,6 +206,7 @@ export class AntigravityRuntime {
 	private capEvictions = 0;
 	private capOverflows = 0;
 	private readonly nativeTools: NativeTools;
+	private readonly systemPromptDelivery: SystemPromptDelivery;
 	private readonly pool: AcpConnectionPool | undefined;
 	private readonly maxSessionsPerProcess: number;
 
@@ -216,11 +218,13 @@ export class AntigravityRuntime {
 			idleTtlMs?: number;
 			maxLiveSessions?: number;
 			nativeTools?: NativeTools;
+			systemPromptDelivery?: SystemPromptDelivery;
 			sharedProcess?: boolean;
 			maxSessionsPerProcess?: number;
 		} = {},
 	) {
 		this.nativeTools = limits.nativeTools ?? "all";
+		this.systemPromptDelivery = limits.systemPromptDelivery ?? "context";
 		this.maxSessionsPerProcess = limits.maxSessionsPerProcess ?? DEFAULT_MAX_SESSIONS_PER_PROCESS;
 		if (limits.sharedProcess) {
 			this.pool = new AcpConnectionPool({
@@ -243,8 +247,8 @@ export class AntigravityRuntime {
 
 	stream(model: AntigravityModel, context: Context, options: SimpleStreamOptions = {}): PiEventWriter {
 		const writer = new PiEventWriter(model);
-		// ACP has no mid-conversation system-message API. agy 1.4.3+ takes changed instructions
-		// through a resume of the saved session; other runtimes replay Pi's prompt/tool deltas
+		// ACP has no mid-conversation system-message API. With append delivery on agy 1.4.3+, changed
+		// instructions go through a resume of the saved session; otherwise the runtime replays Pi's prompt/tool deltas
 		// into a checkpoint whose fingerprint invalidates stale warm sessions.
 		try {
 			const transcript = collapseSystemMessages(normalizeContext(context));
@@ -521,6 +525,7 @@ export class AntigravityRuntime {
 			capEvictions: this.capEvictions,
 			capOverflows: this.capOverflows,
 			nativeTools: this.nativeTools,
+			systemPromptDelivery: this.systemPromptDelivery,
 			sharedProcess: this.pool !== undefined,
 			maxSessionsPerProcess: this.maxSessionsPerProcess,
 			sharedProcesses: this.pool?.snapshot() ?? [],
@@ -996,11 +1001,17 @@ export class AntigravityRuntime {
 			const mcpServers = mcpServer ? [mcpServer] : [];
 			let session: AcpNewSessionResponse | undefined;
 			let restored = false;
-			const instructionsInSetup = acceptsSystemPrompt(initialize);
+			const instructionsInSetup = this.systemPromptDelivery === "append" && acceptsSystemPrompt(initialize);
 			const meta = sessionMeta(this.nativeTools, mcpServer?.name, instructionsInSetup ? instructions : undefined);
 			// Antigravity persists the builtin filter per session and keeps it on resume, so a session
-			// saved under another filter is replaced rather than restored.
-			if (saved?.cwd === cwd && saved.nativeTools === nativeToolsKey(this.nativeTools)) {
+			// saved under another filter is replaced rather than restored. The same holds for the way the
+			// instructions were delivered: restoring an append session under context would leave a warm
+			// history whose first prompt, the only carrier of the instructions, is never sent again, and
+			// the history fingerprint filters system messages only under append. A record from before the
+			// mode was stored counts as append where this fork appended (agy 1.4.3+), else as context.
+			const savedDelivery = saved?.systemPromptDelivery ?? (acceptsSystemPrompt(initialize) ? "append" : "context");
+			if (saved?.cwd === cwd && saved.nativeTools === nativeToolsKey(this.nativeTools) &&
+				savedDelivery === (instructionsInSetup ? "append" : "context")) {
 				// Registered before restoring, so a load's history replay is not counted as unknown traffic.
 				const unregister = lease?.register(saved.acpSessionId, handlers);
 				if (initialize.agentCapabilities?.sessionCapabilities?.resume) {
@@ -1113,6 +1124,7 @@ export class AntigravityRuntime {
 		if (!binding.piSessionId) return;
 		if (binding.needsReconstruction) { this.sessionStore?.remove(binding.piSessionId); return; }
 		const nativeTools = nativeToolsKey(this.nativeTools);
+		// Always written: an absent field would mark a new context record as a legacy append one.
 		this.sessionStore?.save({
 			piSessionId: binding.piSessionId,
 			acpSessionId: binding.session.sessionId,
@@ -1124,6 +1136,7 @@ export class AntigravityRuntime {
 				? { expectedAssistantFingerprint: binding.expectedAssistantFingerprint }
 				: {}),
 			...(nativeTools ? { nativeTools } : {}),
+			systemPromptDelivery: binding.instructionsInSetup ? "append" : "context",
 			lastActive: Date.now(),
 		});
 	}
@@ -1314,7 +1327,7 @@ function hasUsableLocalAuth(health: AntigravityAuthHealth): boolean {
 	return health.status === "api-key-env" || health.status === "oauth-refreshable";
 }
 
-/** agy 1.4.3 appends `_meta.antigravity.systemPrompt.append` to its own system prompt; older runtimes were not verified. */
+/** agy 1.4.3 can append `_meta.antigravity.systemPrompt.append` to its own system prompt; older runtimes were not verified. */
 function acceptsSystemPrompt(initialize: InitializeResponse): boolean {
 	const agent = initialize.agentInfo;
 	if (agent?.name !== "antigravity-acp") return false;

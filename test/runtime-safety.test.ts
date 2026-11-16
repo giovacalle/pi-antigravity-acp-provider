@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AntigravityAcpConnection } from "../src/acp/connection.js";
 import { AcpSessionStore } from "../src/acp/session-store.js";
 import { AntigravityRuntime, PERMISSION_TOOL_NAME, PERMISSION_RESULT_KIND } from "../src/runtime.js";
-import type { NativeTools, PermissionMode } from "../src/config.js";
+import type { NativeTools, PermissionMode, SystemPromptDelivery } from "../src/config.js";
 import type { AntigravityQuotaSnapshot } from "../src/acp/usage-quota.js";
 import type { PiEventWriter } from "../src/stream/pi-events.js";
 import { piToolFingerprint, PiMcpBridge } from "../src/mcp/bridge.js";
@@ -24,7 +24,7 @@ afterEach(async () => {
 	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore, limits?: { idleTtlMs?: number; maxLiveSessions?: number; nativeTools?: NativeTools; sharedProcess?: boolean; maxSessionsPerProcess?: number }) {
+function setup(scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore, limits?: { idleTtlMs?: number; maxLiveSessions?: number; nativeTools?: NativeTools; systemPromptDelivery?: SystemPromptDelivery; sharedProcess?: boolean; maxSessionsPerProcess?: number }) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-runtime-safety-")); roots.push(root);
 	const log = path.join(root, "calls.jsonl"); fs.writeFileSync(log, "");
 	const connections: AntigravityAcpConnection[] = [];
@@ -589,29 +589,32 @@ describe("instruction updates during continuations", () => {
 	});
 });
 
-describe("instructions in the session setup", () => {
+describe("instructions appended to the session setup", () => {
 	beforeEach(() => vi.stubEnv("FAKE_AGENT_VERSION", "1.4.3"));
 	afterEach(() => vi.unstubAllEnvs());
+	// Opt-in delivery; the default carries the instructions in the first prompt instead.
+	const setupAppend = (scenario?: string, mode: PermissionMode = "yolo", store?: AcpSessionStore) =>
+		setup(scenario, mode, store, { systemPromptDelivery: "append" });
 	const appendOf = (entry: { _meta?: unknown } | undefined) =>
 		(entry?._meta as { antigravity?: { systemPrompt?: { append?: string } } } | undefined)?.antigravity?.systemPrompt?.append;
 	const setupMethods = (entries: Array<{ method: string }>) => entries.map((entry) => entry.method)
 		.filter((method) => ["session/new", "session/resume", "session/load", "session/prompt"].includes(method));
 
 	it("sends the instructions on session/new and keeps them out of the prompt", async () => {
-		const { runtime, entries } = setup();
+		const { runtime, entries } = setupAppend();
 		expect((await drain(runtime.stream(model, { systemPrompt: "RULES", messages: [user("hello")] }, { sessionId: "append", apiKey: "test-key" }))).stopReason).toBe("stop");
 		expect(entries().find((entry) => entry.method === "session/new")?._meta).toEqual({ antigravity: { systemPrompt: { append: "RULES" } } });
 		expect(entries().find((entry) => entry.method === "session/prompt")?.prompt).toEqual([{ type: "text", text: "hello" }]);
 	});
 
 	it("resends the instructions when resuming a saved session", async () => {
-		const fixture = setup();
+		const fixture = setupAppend();
 		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
-		const first = setup(undefined, "yolo", store);
+		const first = setupAppend(undefined, "yolo", store);
 		const message = await drain(first.runtime.stream(model, { systemPrompt: "RULES", messages: [user("hello")] }, { sessionId: "append", apiKey: "test-key" }));
 		await first.runtime.close();
 		const sessionId = store.get("append")?.acpSessionId;
-		const second = setup(undefined, "yolo", store);
+		const second = setupAppend(undefined, "yolo", store);
 		const next = await drain(second.runtime.stream(model, { systemPrompt: "RULES", messages: [user("hello"), message, user("next", 2)] }, { sessionId: "append", apiKey: "test-key" }));
 		expect(next.stopReason).toBe("stop");
 		const resume = second.entries().find((entry) => entry.method === "session/resume");
@@ -621,9 +624,9 @@ describe("instructions in the session setup", () => {
 	});
 
 	it("resumes the same session with changed instructions instead of rebuilding", async () => {
-		const fixture = setup();
+		const fixture = setupAppend();
 		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
-		const { runtime, entries } = setup(undefined, "yolo", store);
+		const { runtime, entries } = setupAppend(undefined, "yolo", store);
 		const firstContext = normalizeContext({ systemPrompt: "ORIGINAL", messages: [user("hello")] });
 		const reply = await drain(runtime.stream(model, firstContext, { sessionId: "change", apiKey: "test-key" }));
 		const sessionId = store.get("change")?.acpSessionId;
@@ -638,9 +641,9 @@ describe("instructions in the session setup", () => {
 	});
 
 	it("applies instructions changed during a tool continuation on the next turn", async () => {
-		const fixture = setup();
+		const fixture = setupAppend();
 		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
-		const { runtime, entries } = setup(undefined, "yolo", store);
+		const { runtime, entries } = setupAppend(undefined, "yolo", store);
 		const firstContext = normalizeContext({ systemPrompt: "ORIGINAL_RULE", tools, messages: [user("use bridge")] });
 		const first = await drain(runtime.stream(model, firstContext, { sessionId: "rules", apiKey: "test-key" }));
 		const call = first.content.find((block) => block.type === "toolCall");
@@ -659,6 +662,40 @@ describe("instructions in the session setup", () => {
 		expect(entries().filter((entry) => entry.method === "session/new")).toHaveLength(1);
 		expect(entries().filter((entry) => entry.method === "session/prompt").at(-1)?.prompt).toEqual([{ type: "text", text: "next" }]);
 	});
+});
+
+describe("instructions in the first prompt (default delivery)", () => {
+	beforeEach(() => vi.stubEnv("FAKE_AGENT_VERSION", "1.4.3"));
+	afterEach(() => vi.unstubAllEnvs());
+	const RULES = "You are a coding assistant running inside pi. RULES";
+	const appendOf = (entry: { _meta?: unknown } | undefined) =>
+		(entry?._meta as { antigravity?: { systemPrompt?: { append?: string } } } | undefined)?.antigravity?.systemPrompt?.append;
+	const setupMethods = (entries: Array<{ method: string }>) => entries.map((entry) => entry.method)
+		.filter((method) => ["session/new", "session/resume", "session/load", "session/prompt"].includes(method));
+	const firstPromptText = (entries: Array<{ method: string; prompt?: unknown }>) =>
+		JSON.stringify(entries.find((entry) => entry.method === "session/prompt")?.prompt);
+	const withInstructions = (messages: Context["messages"], systemPrompt = RULES) => normalizeContext({ systemPrompt, messages });
+	const storeIn = () => new AcpSessionStore(path.join(setup().root, "sessions.json"));
+	// Runs one turn on a runtime with the given delivery, then closes it so the session is only in the store.
+	async function savedTurn(store: AcpSessionStore, systemPromptDelivery: SystemPromptDelivery | undefined, sessionId = "mode") {
+		const first = setup(undefined, "yolo", store, systemPromptDelivery ? { systemPromptDelivery } : undefined);
+		const context: Context = { systemPrompt: RULES, messages: [user("hello")] };
+		const reply = await drain(first.runtime.stream(model, context, { sessionId, apiKey: "test-key" }));
+		expect(reply.stopReason).toBe("stop");
+		await first.runtime.close();
+		return { context, reply, first };
+	}
+	const secondTurn = (runtime: AntigravityRuntime, saved: { context: Context; reply: Awaited<ReturnType<typeof turn>> }, sessionId = "mode") =>
+		drain(runtime.stream(model, { systemPrompt: RULES, messages: [...saved.context.messages, saved.reply, user("next", 2)] }, { sessionId, apiKey: "test-key" }));
+
+	it("sends no system prompt in the setup and carries the instructions verbatim in the first prompt", async () => {
+		const { runtime, entries } = setup();
+		expect((await drain(runtime.stream(model, { systemPrompt: RULES, messages: [user("hello")] }, { sessionId: "ctx", apiKey: "test-key" }))).stopReason).toBe("stop");
+		expect("_meta" in entries().find((entry) => entry.method === "session/new")!).toBe(false);
+		const prompt = entries().find((entry) => entry.method === "session/prompt")?.prompt as Array<{ type: string; resource?: { text: string } }>;
+		const resource = prompt.find((block) => block.type === "resource");
+		expect(resource?.resource?.text).toContain(`# Pi session instructions\n\n${RULES}`);
+	});
 
 	it("keeps the instructions in the prompt for an older runtime", async () => {
 		vi.stubEnv("FAKE_AGENT_VERSION", "1.4.1");
@@ -666,6 +703,85 @@ describe("instructions in the session setup", () => {
 		await drain(runtime.stream(model, { systemPrompt: "RULES", messages: [user("hello")] }, { sessionId: "legacy", apiKey: "test-key" }));
 		expect("_meta" in entries().find((entry) => entry.method === "session/new")!).toBe(false);
 		expect(JSON.stringify(entries().find((entry) => entry.method === "session/prompt")?.prompt)).toContain("RULES");
+	});
+
+	it("rebuilds the session when the instructions change instead of resuming", async () => {
+		const { runtime, entries } = setup(undefined, "yolo", storeIn());
+		const first = withInstructions([user("hello")], "ORIGINAL");
+		const reply = await drain(runtime.stream(model, first, { sessionId: "change", apiKey: "test-key" }));
+		const next = await drain(runtime.stream(model, normalizeContext({ messages: [...first.messages, reply,
+			{ role: "system", content: "UPDATED", timestamp: 2 }, user("next", 3)] }), { sessionId: "change", apiKey: "test-key" }));
+		expect(next.stopReason).toBe("stop");
+		expect(setupMethods(entries())).toEqual(["session/new", "session/prompt", "session/new", "session/prompt"]);
+		expect(entries().some((entry) => appendOf(entry) !== undefined)).toBe(false);
+		expect(JSON.stringify(entries().filter((entry) => entry.method === "session/prompt").at(-1)?.prompt)).toContain("UPDATED");
+	});
+
+	it("resumes a session saved under the same delivery", async () => {
+		const store = storeIn();
+		const saved = await savedTurn(store, undefined);
+		expect(store.get("mode")?.systemPromptDelivery).toBe("context");
+		const second = setup(undefined, "yolo", store);
+		expect((await secondTurn(second.runtime, saved)).stopReason).toBe("stop");
+		expect(setupMethods(second.entries())).toEqual(["session/resume", "session/prompt"]);
+	});
+
+	it("rebuilds from history instead of restoring a session saved under append", async () => {
+		const store = storeIn();
+		const saved = await savedTurn(store, "append");
+		expect(store.get("mode")?.systemPromptDelivery).toBe("append");
+		const second = setup(undefined, "yolo", store);
+		expect((await secondTurn(second.runtime, saved)).stopReason).toBe("stop");
+		expect(setupMethods(second.entries())).toEqual(["session/new", "session/prompt"]);
+		expect(second.entries().some((entry) => appendOf(entry) !== undefined)).toBe(false);
+		expect(firstPromptText(second.entries())).toContain("# Pi session instructions");
+		expect(firstPromptText(second.entries())).toContain(RULES);
+	});
+
+	it("rebuilds from history instead of restoring a session saved under context when append is chosen", async () => {
+		const store = storeIn();
+		const saved = await savedTurn(store, undefined);
+		const second = setup(undefined, "yolo", store, { systemPromptDelivery: "append" });
+		expect((await secondTurn(second.runtime, saved)).stopReason).toBe("stop");
+		expect(setupMethods(second.entries())).toEqual(["session/new", "session/prompt"]);
+		expect(appendOf(second.entries().find((entry) => entry.method === "session/new"))).toBe(RULES);
+		expect(store.get("mode")?.systemPromptDelivery).toBe("append");
+	});
+
+	// Records written before the delivery was stored carry no mode; the fork appended on agy >= 1.4.3 since 2026-10-30.
+	it.each([
+		["1.4.3", "rebuilds", ["session/new", "session/prompt"]],
+		["1.4.1", "resumes", ["session/resume", "session/prompt"]],
+	])("treats a legacy record on agy %s as the delivery it was saved with and %s", async (version, _outcome, methods) => {
+		vi.stubEnv("FAKE_AGENT_VERSION", version);
+		const file = path.join(setup().root, "sessions.json");
+		const store = new AcpSessionStore(file);
+		const saved = await savedTurn(store, undefined);
+		const records = JSON.parse(fs.readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
+		for (const record of records) delete record.systemPromptDelivery;
+		fs.writeFileSync(file, JSON.stringify(records));
+		const second = setup(undefined, "yolo", store);
+		expect((await secondTurn(second.runtime, saved)).stopReason).toBe("stop");
+		expect(setupMethods(second.entries())).toEqual(methods);
+	});
+
+	it("records the effective delivery, so append on an older runtime resumes under context", async () => {
+		vi.stubEnv("FAKE_AGENT_VERSION", "1.4.1");
+		const store = storeIn();
+		const saved = await savedTurn(store, "append");
+		expect(store.get("mode")?.systemPromptDelivery).toBe("context");
+		const second = setup(undefined, "yolo", store);
+		expect((await secondTurn(second.runtime, saved)).stopReason).toBe("stop");
+		expect(setupMethods(second.entries())).toEqual(["session/resume", "session/prompt"]);
+	});
+
+	it("compares the effective delivery, not the configured one: append on an older runtime still resumes under append", async () => {
+		vi.stubEnv("FAKE_AGENT_VERSION", "1.4.1");
+		const store = storeIn();
+		const saved = await savedTurn(store, "append");
+		const second = setup(undefined, "yolo", store, { systemPromptDelivery: "append" });
+		expect((await secondTurn(second.runtime, saved)).stopReason).toBe("stop");
+		expect(setupMethods(second.entries())).toEqual(["session/resume", "session/prompt"]);
 	});
 });
 

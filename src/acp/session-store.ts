@@ -12,6 +12,8 @@ export interface SavedSessionRecord {
 	historyFingerprint: string;
 	expectedAssistantFingerprint?: string;
 	nativeTools?: string;
+	/** Effective delivery of Pi's instructions; records from before it was stored have none. */
+	systemPromptDelivery?: "context" | "append";
 	lastActive: number;
 }
 
@@ -84,6 +86,7 @@ function validRecord(value: unknown): value is SavedSessionRecord {
 		(record.expectedAssistantFingerprint === undefined ||
 			typeof record.expectedAssistantFingerprint === "string") &&
 		(record.nativeTools === undefined || typeof record.nativeTools === "string") &&
+		(record.systemPromptDelivery === undefined || record.systemPromptDelivery === "context" || record.systemPromptDelivery === "append") &&
 		typeof record.lastActive === "number" &&
 		Number.isFinite(record.lastActive)
 	);
