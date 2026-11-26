@@ -24,6 +24,7 @@
 | RSK-18 | Model metadata (window/cost/reasoning) is inaccurate | Medium / Medium | conservative fallback, no invented rates, metadata map/versioning |
 | RSK-19 | Marketplace package dependency conflicts | Medium / Medium | Pi peers `*`, packed install smoke, isolated module roots |
 | RSK-20 | Package/supply-chain surface expands through full CLI | Medium / High | exact pin, lockfile, SBOM/license/audit, minimal package code, no downloader |
+| RSK-21 | Antigravity's MCP client ends a Pi tool call after 180 s (`timed out after 3m0s`) whatever the tool's own `timeout`; the result reaches Pi only after the model moved on. ACP cannot raise it: `to_sdk_mcp_config` drops any timeout, and `_meta.antigravity` carries only `eagerMcpServers`, `mcpMaxOutputBytes` and `systemPrompt`. Whether MCP progress notifications extend it is unverified | High for long gates / Medium | the bridge lowers a `bash` `timeout` above 150 s to 150 s and prepends a note to the result; a call with no `timeout` is not capped; recheck on each runtime bump |
 
 ## 2. Open questions for Milestone 0
 
