@@ -56,6 +56,10 @@ describe("PiMcpBridge", () => {
 				name: "bash",
 				description: "Run a command",
 				parameters: Type.Object({ command: Type.String(), timeout: Type.Optional(Type.Number()) }),
+			}, {
+				name: "wait",
+				description: "Wait in milliseconds",
+				parameters: Type.Object({ timeout: Type.Number() }),
 			}],
 			onCall,
 		});
@@ -77,6 +81,10 @@ describe("PiMcpBridge", () => {
 			const kept = await client.callTool({ name: "pi_bash", arguments: { command: "ls", timeout: 150 } });
 			expect(onCall.mock.calls[1]![0].arguments).toEqual({ command: "ls", timeout: 150 });
 			expect(kept.content).toEqual([{ type: "text", text: "done" }]);
+
+			const other = await client.callTool({ name: "pi_wait", arguments: { timeout: 900 } });
+			expect(onCall.mock.calls[2]![0].arguments).toEqual({ timeout: 900 });
+			expect(other.content).toEqual([{ type: "text", text: "done" }]);
 		} finally {
 			await client.close();
 			await bridge.close();
