@@ -20,6 +20,10 @@ const BODY_LIMIT = 1024 * 1024;
 // and inlines at most 48 KiB of any result anyway.
 export const MCP_MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_TOOLS = 64;
+// Antigravity's MCP client ends every tool call after 180 s ("MCP tool call to server ... timed out
+// after 3m0s"), and ACP offers no way to raise it. A longer bash `timeout` only loses the output, so
+// the bridge lowers it to leave room for returning the result.
+export const BASH_TIMEOUT_CAP_SECONDS = 150;
 
 interface BridgeTool {
 	mcpName: string;
@@ -152,7 +156,17 @@ export class PiMcpBridge {
 			} catch {
 				return toolError("The original Pi tool schema could not validate these arguments");
 			}
-			return this.options.onCall({ id: crypto.randomUUID(), name: tool.piName, arguments: args });
+			const requested = tool.piName === "bash" ? args.timeout : undefined;
+			if (typeof requested !== "number" || requested <= BASH_TIMEOUT_CAP_SECONDS) {
+				return this.options.onCall({ id: crypto.randomUUID(), name: tool.piName, arguments: args });
+			}
+			const result = await this.options.onCall({
+				id: crypto.randomUUID(),
+				name: tool.piName,
+				arguments: { ...args, timeout: BASH_TIMEOUT_CAP_SECONDS },
+			});
+			const note = `Bridge note: timeout ${requested} s lowered to ${BASH_TIMEOUT_CAP_SECONDS} s, because Antigravity ends a tool call after 180 s. Run longer work in the background with a log file and read it back.`;
+			return { ...result, content: [{ type: "text", text: note }, ...result.content] };
 		});
 		const transport = new StreamableHTTPServerTransport(
 			{ sessionIdGenerator: undefined } as unknown as ConstructorParameters<

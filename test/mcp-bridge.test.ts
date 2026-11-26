@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 
-import { PiMcpBridge } from "../src/mcp/bridge.js";
+import { PiMcpBridge, type PiToolInvocation } from "../src/mcp/bridge.js";
 
 const tools: Tool[] = [
 	{
@@ -43,6 +43,40 @@ describe("PiMcpBridge", () => {
 				body: "{}",
 			});
 			expect(unauthorized.status).toBe(401);
+		} finally {
+			await client.close();
+			await bridge.close();
+		}
+	});
+
+	it("caps a bash timeout past Antigravity's MCP call deadline and says so", async () => {
+		const onCall = vi.fn(async (_invocation: PiToolInvocation) => ({ content: [{ type: "text" as const, text: "done" }] }));
+		const bridge = new PiMcpBridge({
+			tools: [{
+				name: "bash",
+				description: "Run a command",
+				parameters: Type.Object({ command: Type.String(), timeout: Type.Optional(Type.Number()) }),
+			}],
+			onCall,
+		});
+		const descriptor = await bridge.start();
+		if (!descriptor || !("url" in descriptor)) throw new Error("bridge did not start");
+		const headers = Object.fromEntries(descriptor.headers.map((header) => [header.name, header.value]));
+		const client = new Client({ name: "bridge-test", version: "1" }, { capabilities: {} });
+		const transport = new StreamableHTTPClientTransport(new URL(descriptor.url), {
+			requestInit: { headers },
+		});
+		try {
+			await client.connect(transport as Parameters<typeof client.connect>[0]);
+			const capped = await client.callTool({ name: "pi_bash", arguments: { command: "make test", timeout: 900 } });
+			expect(onCall.mock.calls[0]![0].arguments).toEqual({ command: "make test", timeout: 150 });
+			const [note, output] = capped.content as { text: string }[];
+			expect(note!.text).toContain("timeout 900 s lowered to 150 s");
+			expect(output!.text).toBe("done");
+
+			const kept = await client.callTool({ name: "pi_bash", arguments: { command: "ls", timeout: 150 } });
+			expect(onCall.mock.calls[1]![0].arguments).toEqual({ command: "ls", timeout: 150 });
+			expect(kept.content).toEqual([{ type: "text", text: "done" }]);
 		} finally {
 			await client.close();
 			await bridge.close();
