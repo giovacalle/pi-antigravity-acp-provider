@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	contextOverflow,
 	quotaExhaustion,
 	RESOURCE_EXHAUSTED_STARTUP_MARGIN_MS,
 	RESOURCE_EXHAUSTED_UNKNOWN_DELAY_MS,
@@ -34,6 +35,21 @@ describe("quotaExhaustion", () => {
 		expect(quotaExhaustion("Usage Limit Reached", now)).toBeUndefined();
 		expect(quotaExhaustion(`${notice()} Anything else.`, now)).toBeUndefined();
 		expect(quotaExhaustion(notice(" Your limit will reset in soon."), now)).toBeUndefined();
+	});
+});
+
+describe("contextOverflow", () => {
+	const overflow = "The input token count exceeds the maximum number of tokens allowed (1048576); input token count: 1098935.";
+
+	it("rewords the notice as an error that keeps Pi's overflow wording", () => {
+		expect(contextOverflow(`\n${overflow}\n`)).toBe(`Antigravity context overflow: ${overflow}`);
+	});
+
+	it("ignores replies that only mention the notice", () => {
+		expect(contextOverflow("Hello")).toBeUndefined();
+		expect(contextOverflow(`Google said: ${overflow}`)).toBeUndefined();
+		expect(contextOverflow(`${overflow}\nSo I split the file.`)).toBeUndefined();
+		expect(contextOverflow("The input token count exceeds the maximum number of tokens allowed by the API, so split the file.")).toBeUndefined();
 	});
 });
 

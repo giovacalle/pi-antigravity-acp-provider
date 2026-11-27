@@ -16,6 +16,8 @@ const qualifiedModelRejected = scenario === "effort-selector" || scenario === "l
 const effortSelector = scenario === "effort-selector";
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 let model = "auto";
+// Prompts per session that carried a `quota until` request.
+const quotaPrompts = new Map();
 let mode = "default";
 let effort = "high";
 let permissionPromptId;
@@ -385,6 +387,29 @@ for await (const line of rl) {
 				send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn",
 					...(reportUsage ? { usage: { inputTokens: 2400, outputTokens: 200, totalTokens: 2600 } } : {}) } });
 			}).catch(() => undefined);
+			continue;
+		}
+		// agy appends every prompt to its session, even one it answers with the quota notice.
+		// `quota until <n>` gets the notice for the first <n> such prompts across agent processes,
+		// then reports how many prompts in this session carried the request.
+		const quotaUntil = /quota until (\d+)/u.exec(text);
+		if (quotaUntil && process.env.FAKE_AGENT_LOG_FILE) {
+			quotaPrompts.set(params.sessionId, (quotaPrompts.get(params.sessionId) ?? 0) + 1);
+			const counter = `${process.env.FAKE_AGENT_LOG_FILE}.quota`;
+			const replies = Number(fs.existsSync(counter) ? fs.readFileSync(counter, "utf8") : 0) + 1;
+			fs.writeFileSync(counter, String(replies));
+			const reply = replies <= Number(quotaUntil[1])
+				? "Usage Limit Reached\n\nYou have reached your current quota for this period."
+				: `copies: ${quotaPrompts.get(params.sessionId)}`;
+			notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: reply } });
+			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+			continue;
+		}
+		// agy reports an over-long input as an ordinary reply rather than an error.
+		if (text === "overflow reply") {
+			notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text:
+				"The input token count exceeds the maximum number of tokens allowed (1048576); input token count: 1098935." } });
+			send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
 			continue;
 		}
 		if (scenario === "resource-exhausted") {

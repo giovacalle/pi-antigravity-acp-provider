@@ -21,6 +21,15 @@ export function quotaExhaustion(text: string, now = Date.now()): { resetAt?: str
 	return {};
 }
 
+// agy replies with this fixed notice, as ordinary text, when the input exceeds the model's context.
+const OVERFLOW = /^The input token count exceeds the maximum number of tokens allowed \(\d+\)(?:; input token count: \d+)?\.?$/u;
+
+/** The overflow notice reworded for Pi, whose overflow check matches "input token count ... exceeds the maximum". */
+export function contextOverflow(text: string): string | undefined {
+	const notice = text.trim();
+	return OVERFLOW.test(notice) ? `Antigravity context overflow: ${notice}` : undefined;
+}
+
 /** agy retries a model-path 429 forever, logging only to stderr: no update and no reply.
  * Tolerate this many retries per inference before failing the prompt. */
 export const RESOURCE_EXHAUSTED_MAX_RETRIES = 2;
