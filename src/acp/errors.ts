@@ -4,6 +4,7 @@ export type AntigravityAcpErrorCode =
 	| "model"
 	| "protocol"
 	| "quota"
+	| "overflow"
 	| "spawn"
 	| "timeout"
 	| "process_exit"

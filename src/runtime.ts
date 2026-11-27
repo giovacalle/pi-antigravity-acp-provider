@@ -33,7 +33,7 @@ import {
 	type PooledProcessSnapshot,
 } from "./acp/connection-pool.js";
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
-import { quotaExhaustion } from "./acp/quota.js";
+import { contextOverflow, quotaExhaustion } from "./acp/quota.js";
 import { compareRuntimeVersions } from "./acp/runtime-manifest.js";
 import { AcpSessionStore } from "./acp/session-store.js";
 import { sessionModels, sessionModes, type AcpModelInfo, type AcpNewSessionResponse, type SessionState } from "./acp/session-state.js";
@@ -806,14 +806,15 @@ export class AntigravityRuntime {
 			if (binding.abortRequested) throw abortError();
 			const usage = usageFromPrompt(response);
 			this.metrics.record(response, usage);
-			// agy reports exhaustion as an ordinary reply; fail it before the turn is persisted.
-			const quota = usage.totalTokens === 0 || response.stopReason === "refusal"
-				? quotaExhaustion(activeWriter.message.content.map((block) => block.type === "text" ? block.text : "").join(""))
-				: undefined;
+			// agy reports exhaustion and overflow as ordinary replies; fail them before the turn is persisted.
+			const reply = activeWriter.message.content.map((block) => block.type === "text" ? block.text : "").join("");
+			const quota = usage.totalTokens === 0 || response.stopReason === "refusal" ? quotaExhaustion(reply) : undefined;
 			if (quota) {
 				throw new AntigravityAcpError("quota",
 					`Antigravity quota exceeded for ${binding.modelId}.${quota.resetAt ? ` Resets at ${quota.resetAt}.` : ""}`);
 			}
+			const overflow = contextOverflow(reply);
+			if (overflow) throw new AntigravityAcpError("overflow", overflow);
 			if (binding.contextUsed !== undefined) {
 				// Pi checks input + cacheRead for silent overflow, not totalTokens. For multiple inferences,
 				// only the latest context size is known, not its cache split; metrics above keep billed totals.
@@ -844,8 +845,12 @@ export class AntigravityRuntime {
 		} catch (error) {
 			binding.writer?.fail(error, isAbort(error));
 			if (isAbort(error) || binding.abortRequested) abortTurn(binding);
-			// A lost session keeps its saved record; the next turn restores it on another process.
-			if (binding.connection.isSessionLost(binding.session.sessionId) || !binding.connection.process.alive) {
+			// agy keeps a refused prompt in its session while Pi does not count it as seen, so a retry on that
+			// session would append the unseen tail again; rebuild the next turn from Pi's history instead.
+			if (error instanceof AntigravityAcpError && (error.code === "quota" || error.code === "overflow")) {
+				await this.dropBinding(key, binding, true);
+			} else if (binding.connection.isSessionLost(binding.session.sessionId) || !binding.connection.process.alive) {
+				// A lost session keeps its saved record; the next turn restores it on another process.
 				await this.dropBinding(key, binding);
 			}
 			throw error;
