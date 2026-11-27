@@ -8,7 +8,11 @@ export type AcpActivity =
 	| { type: "usage"; used: number }
 	| { type: "unknown"; updateType: string };
 
-export function mapSessionUpdate(notification: SessionNotification): AcpActivity[] {
+/**
+ * `mcpCalls` remembers MCP tool call ids, because agy's terminal update carries neither `_meta` nor a title.
+ * Pi's own tools arrive through the MCP bridge as real Pi tool calls, so they are not repeated as activity.
+ */
+export function mapSessionUpdate(notification: SessionNotification, mcpCalls = new Set<string>()): AcpActivity[] {
 	const update = notification.update;
 	switch (update.sessionUpdate) {
 		case "agent_message_chunk":
@@ -20,6 +24,10 @@ export function mapSessionUpdate(notification: SessionNotification): AcpActivity
 				? [{ type: "thought", delta: update.content.text }]
 				: [{ type: "unknown", updateType: `agent_thought:${update.content.type}` }];
 		case "tool_call": {
+			if (isMcpToolCall(update._meta)) {
+				mcpCalls.add(update.toolCallId);
+				return [];
+			}
 			const status = update.status ? ` — ${update.status}` : "";
 			const title = clean(update.title);
 			const singleLineTitle = title.replace(/\s+/gu, " ").trim() || "tool";
@@ -33,6 +41,9 @@ export function mapSessionUpdate(notification: SessionNotification): AcpActivity
 			];
 		}
 		case "tool_call_update": {
+			const mcp = mcpCalls.has(update.toolCallId) || isMcpToolCall(update._meta);
+			if (update.status === "completed" || update.status === "failed") mcpCalls.delete(update.toolCallId);
+			if (mcp) return [];
 			const label = update.title ? clean(update.title) : clean(update.toolCallId);
 			const status = update.status ? ` — ${update.status}` : "";
 			const details = toolContentText(update.content);
@@ -75,6 +86,10 @@ function toolContentText(content: SessionNotification["update"] extends infer _T
 		}
 	}
 	return output.join("\n").slice(0, 4_000);
+}
+
+function isMcpToolCall(meta: { [key: string]: unknown } | null | undefined): boolean {
+	return meta?.is_mcp_tool_call === true;
 }
 
 function clean(value: string): string {

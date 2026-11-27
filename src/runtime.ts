@@ -81,6 +81,8 @@ interface PendingPiTool {
 
 interface Binding {
 	key: string;
+	/** MCP tool call ids still running, so their activity is not echoed into thinking. */
+	mcpToolCalls: Set<string>;
 	credentialId: string;
 	cwd: string;
 	connection: AntigravityAcpConnection;
@@ -1017,6 +1019,7 @@ export class AntigravityRuntime {
 				writer,
 				permission: undefined,
 				pendingTools: new Map(),
+				mcpToolCalls: new Set(),
 				contextUsed: undefined,
 				inferences: 0,
 				toolBatchTimer: undefined,
@@ -1153,7 +1156,7 @@ export class AntigravityRuntime {
 			return;
 		}
 		if (!binding.writer) return;
-		for (const activity of mapSessionUpdate(notification)) {
+		for (const activity of mapSessionUpdate(notification, binding.mcpToolCalls)) {
 			if (activity.type === "text") binding.writer.text(activity.delta);
 			else if (activity.type === "thought") binding.writer.thinking(activity.delta);
 			else if (activity.type === "plan") binding.writer.thinking(activity.text);
