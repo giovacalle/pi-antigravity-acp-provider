@@ -27,7 +27,7 @@ import {
 import { AntigravityAcpConnection, type AntigravityConnectionOptions } from "./acp/connection.js";
 import { providerAcpDirectory, providerAcpEnvironment } from "./acp/credential-storage.js";
 import { abortError, AntigravityAcpError, errorMessage } from "./acp/errors.js";
-import { quotaExhaustion } from "./acp/quota.js";
+import { contextOverflow, quotaExhaustion } from "./acp/quota.js";
 import { confirmsPermissionMode, permissionModeId, unsupportedPermissionMode } from "./acp/permission-policy.js";
 import { canonicalJson } from "./acp/runtime-manifest.js";
 import { AcpSessionStore } from "./acp/session-store.js";
@@ -752,14 +752,15 @@ export class AntigravityRuntime {
 				if (binding.abortRequested) throw abortError();
 				const usage = usageFromPrompt(response, model);
 				this.metrics.record(response, usage);
-				// agy reports exhaustion as an ordinary reply; fail it before the turn is persisted.
-				const quota = usage.totalTokens === 0 || response.stopReason === "refusal"
-					? quotaExhaustion(activeWriter.message.content.map((block) => block.type === "text" ? block.text : "").join(""))
-					: undefined;
+				// agy reports exhaustion and overflow as ordinary replies; fail them before the turn is persisted.
+				const reply = activeWriter.message.content.map((block) => block.type === "text" ? block.text : "").join("");
+				const quota = usage.totalTokens === 0 || response.stopReason === "refusal" ? quotaExhaustion(reply) : undefined;
 				if (quota) {
 					throw new AntigravityAcpError("quota",
 						`Antigravity quota exceeded for ${binding.modelId}.${quota.resetAt ? ` Resets at ${quota.resetAt}.` : ""}`);
 				}
+				const overflow = contextOverflow(reply);
+				if (overflow) throw new AntigravityAcpError("overflow", overflow);
 				if (binding.contextUsed !== undefined) {
 					// Pi checks input + cacheRead for silent overflow, not totalTokens. For multiple inferences,
 					// only the latest context size is known, not its cache split; metrics above keep billed totals.
@@ -796,9 +797,14 @@ export class AntigravityRuntime {
 					this.commitProgress(binding, (binding.writer ?? writer).message);
 				}
 				if (isAbort(error) || binding.abortRequested) abortTurn(binding);
+				const refused = error instanceof AntigravityAcpError && (error.code === "quota" || error.code === "overflow");
 				// Evict closing connections before failing the stream can wake a retry.
-				if (isConnectionDead(binding.connection)) await this.dropBinding(key, binding);
+				if (!refused && isConnectionDead(binding.connection)) await this.dropBinding(key, binding);
 				binding.writer?.fail(error, isAbort(error));
+				// agy keeps a refused prompt in its session while Pi does not count it as seen, so a retry on that
+				// session would append the unseen tail again; rebuild the next turn from Pi history instead.
+				// Closing first would fail the stream with a generic error. A retry waits for this turn's queue.
+				if (refused) await this.dropBinding(key, binding, true);
 				throw error;
 			} finally {
 				if (onTurnAbort) options.signal?.removeEventListener("abort", onTurnAbort);

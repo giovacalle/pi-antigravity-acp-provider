@@ -725,10 +725,8 @@ describe("quota exhaustion", () => {
 		expect(message.errorMessage).not.toMatch(/\b429\b|rate limit|try again in|reset in/iu);
 		const resetAt = Date.parse(/Resets at (\S+)\.$/u.exec(message.errorMessage!)![1]!);
 		expect(Math.abs(resetAt - (Date.now() + 231 * 60_000))).toBeLessThan(60_000);
-		const snapshot = await runtime.snapshot();
-		expect(snapshot.bindings).toBe(1);
-		expect(snapshot.processes[0]?.alive).toBe(true);
-		expect(store.get("quota")?.messageCount ?? 0).toBe(0);
+		expect((await runtime.snapshot()).bindings).toBe(0);
+		expect(store.get("quota")).toBeUndefined();
 	});
 
 	it("converts the absolute reset date to ISO", async () => {
@@ -762,6 +760,35 @@ describe("quota exhaustion", () => {
 		expect(message.errorMessage).toMatch(/^Antigravity quota exceeded:/u);
 		expect(isRetryableAssistantError(message)).toBe(false);
 		expect(store.get("exhausted")?.messageCount ?? 0).toBe(0);
+	});
+
+	it("retries after quota replies without duplicating the request in the Antigravity session", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const { runtime } = setup(undefined, "yolo", store);
+		const first = await turn(runtime, [user("hello")], "quota-retry");
+		expect(first.stopReason).toBe("stop");
+		const retry = [user("hello"), first, user("quota until 3", 2)];
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const refused = await turn(runtime, retry, "quota-retry");
+			expect(refused.errorMessage).toMatch(/^Antigravity quota exceeded/u);
+		}
+		const recovered = await turn(runtime, retry, "quota-retry");
+		expect(recovered.stopReason).toBe("stop");
+		expect(recovered.content).toEqual([{ type: "text", text: "copies: 1" }]);
+	});
+
+	it("fails an over-long input reported as a reply so Pi can compact", async () => {
+		const fixture = setup();
+		const store = new AcpSessionStore(path.join(fixture.root, "sessions.json"));
+		const { runtime } = setup(undefined, "yolo", store);
+		const first = await turn(runtime, [user("hello")], "overflow");
+		const message = await turn(runtime, [user("hello"), first, user("overflow reply", 2)], "overflow");
+		expect(message.stopReason).toBe("error");
+		expect(message.errorMessage).toMatch(/^Antigravity context overflow: /u);
+		expect(isContextOverflow(message, model.contextWindow)).toBe(true);
+		expect((await runtime.snapshot()).bindings).toBe(0);
+		expect(store.get("overflow")).toBeUndefined();
 	});
 
 	it("leaves a normal reply that quotes the wording untouched", async () => {
