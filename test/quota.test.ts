@@ -49,6 +49,7 @@ describe("contextOverflow", () => {
 		expect(contextOverflow("Hello")).toBeUndefined();
 		expect(contextOverflow(`Google said: ${overflow}`)).toBeUndefined();
 		expect(contextOverflow(`${overflow}\nSo I split the file.`)).toBeUndefined();
+		expect(contextOverflow("The input token count exceeds the maximum number of tokens allowed by the API, so split the file.")).toBeUndefined();
 	});
 });
 

@@ -22,7 +22,7 @@ export function quotaExhaustion(text: string, now = Date.now()): { resetAt?: str
 }
 
 // agy replies with this fixed notice, as ordinary text, when the input exceeds the model's context.
-const OVERFLOW = /^The input token count exceeds the maximum number of tokens allowed\b[^\n]*$/iu;
+const OVERFLOW = /^The input token count exceeds the maximum number of tokens allowed \(\d+\)(?:; input token count: \d+)?\.?$/u;
 
 /** The overflow notice reworded for Pi, whose overflow check matches "input token count ... exceeds the maximum". */
 export function contextOverflow(text: string): string | undefined {
