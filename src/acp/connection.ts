@@ -192,22 +192,30 @@ export class AntigravityAcpConnection {
 		);
 	}
 
-	private sessionToolMetadata() {
+	private sessionMetadata(meta?: Record<string, unknown>) {
 		// run_workflow materializes its built-in skill into the workspace. Use the
 		// server's tool filter rather than deleting files or changing the session cwd.
 		// An explicit empty filter also clears a filter persisted by an older session.
-		return { antigravity: { disabledTools: this.nativeWorkflows ? [] : ["run_workflow"] } };
+		const antigravity = meta?.antigravity;
+		return {
+			...meta,
+			antigravity: {
+				disabledTools: this.nativeWorkflows ? [] : ["run_workflow"],
+				...(antigravity && typeof antigravity === "object" && !Array.isArray(antigravity) ? antigravity : {}),
+			},
+		};
 	}
 
 	async newSession(
 		cwd: string,
 		signal?: AbortSignal,
 		mcpServers: McpServer[] = [],
+		meta?: Record<string, unknown>,
 	): Promise<AcpNewSessionResponse> {
 		await this.initialize();
 		const response = await this.withAbort(
 			this.withDeadline(
-				this.connection.agent.request(methods.agent.session.new, { cwd, mcpServers, _meta: this.sessionToolMetadata() }),
+				this.connection.agent.request(methods.agent.session.new, { cwd, mcpServers, _meta: this.sessionMetadata(meta) }),
 				this.operationTimeoutMs,
 				"session/new",
 			),
@@ -226,11 +234,12 @@ export class AntigravityAcpConnection {
 		cwd: string,
 		mcpServers: McpServer[] = [],
 		signal?: AbortSignal,
+		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
 		await this.initialize();
 		const response = await this.withAbort(
 			this.withDeadline(
-				this.connection.agent.request(methods.agent.session.load, { sessionId, cwd, mcpServers, _meta: this.sessionToolMetadata() }),
+				this.connection.agent.request(methods.agent.session.load, { sessionId, cwd, mcpServers, _meta: this.sessionMetadata(meta) }),
 				this.operationTimeoutMs,
 				"session/load",
 			),
@@ -244,11 +253,12 @@ export class AntigravityAcpConnection {
 		cwd: string,
 		mcpServers: McpServer[] = [],
 		signal?: AbortSignal,
+		meta?: Record<string, unknown>,
 	): Promise<SessionState> {
 		await this.initialize();
 		const response = await this.withAbort(
 			this.withDeadline(
-				this.connection.agent.request(methods.agent.session.resume, { sessionId, cwd, mcpServers, _meta: this.sessionToolMetadata() }),
+				this.connection.agent.request(methods.agent.session.resume, { sessionId, cwd, mcpServers, _meta: this.sessionMetadata(meta) }),
 				this.operationTimeoutMs,
 				"session/resume",
 			),

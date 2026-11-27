@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +11,32 @@ import { findSessionSelector, sessionModels, sessionModes } from "../src/acp/ses
 const fakeAgent = fileURLToPath(new URL("./fixtures/fake-agent.mjs", import.meta.url));
 
 describe("AntigravityAcpConnection", () => {
+	it("merges caller _meta into the tool filter on session setup", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-connection-meta-"));
+		const log = path.join(root, "calls.jsonl");
+		const connection = new AntigravityAcpConnection({
+			cwd: path.dirname(fakeAgent), command: process.execPath, args: [fakeAgent, "config-options"],
+			env: { ...process.env, FAKE_AGENT_LOG_FILE: log }, nativeWorkflows: false,
+		});
+		try {
+			const session = await connection.newSession(process.cwd(), undefined, [], { antigravity: { x: 1 }, other: true });
+			await connection.resumeSession(session.sessionId, process.cwd(), [], undefined, { antigravity: { x: 2 } });
+			await connection.loadSession(session.sessionId, process.cwd(), [], undefined, { antigravity: { disabledTools: [] } });
+			await connection.newSession(process.cwd());
+			const entries = fs.readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { method: string; params?: { _meta?: unknown } })
+				.filter((entry) => ["session/new", "session/resume", "session/load"].includes(entry.method));
+			expect(entries.map((entry) => entry.params?._meta)).toEqual([
+				{ other: true, antigravity: { disabledTools: ["run_workflow"], x: 1 } },
+				{ antigravity: { disabledTools: ["run_workflow"], x: 2 } },
+				{ antigravity: { disabledTools: [] } },
+				{ antigravity: { disabledTools: ["run_workflow"] } },
+			]);
+		} finally {
+			await connection.close();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("ignores known browser-launch stdout noise", async () => {
 		const connection = new AntigravityAcpConnection({
 			cwd: path.dirname(fakeAgent),
